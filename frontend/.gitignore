@@ -1,0 +1,11 @@
+node_modules
+dist
+*.local
+.DS_Store
+
+# tsc 增量编译产物
+*.tsbuildinfo
+
+# tsc 编译 vite.config.ts 产生的中间文件(只应保留 .ts 源)
+vite.config.d.ts
+vite.config.js
