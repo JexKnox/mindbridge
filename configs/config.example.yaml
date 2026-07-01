@@ -1,0 +1,36 @@
+# mindbridge 配置示例
+# 复制为 config.yaml 并按需修改;${VAR} 形式会从环境变量读取
+
+server:
+  addr: ":8080"
+  static_dir: "frontend/dist"   # 前端构建产物;不存在则跳过静态托管(纯后端开发)
+
+postgres:
+  dsn: "postgres://mindbridge:mindbridge@localhost:5432/mindbridge?sslmode=disable"
+
+qdrant:
+  host: "localhost"
+  port: 6333
+  # api_key: "${QDRANT_API_KEY}"  # 本地单容器无需
+
+models:
+  chat:
+    provider: openai            # 仅 openai(OpenAI 兼容)起步
+    base_url: "${CHAT_BASE_URL}"
+    api_key: "${CHAT_API_KEY}"
+    model: "${CHAT_MODEL}"
+  embedding:
+    provider: openai
+    base_url: "${EMB_BASE_URL}"
+    api_key: "${EMB_API_KEY}"
+    model: "${EMB_MODEL}"
+
+ingest:
+  chunk_size: 400               # 每个 chunk 的目标 token 数
+  chunk_overlap: 80             # 相邻 chunk 重叠 token 数
+  separators: ["\n\n", "\n", " "]
+
+rag:
+  retrieve_top_k: 20            # 向量召回数量
+  rerank_top_k: 6               # rerank 后保留(留接口,本期不实现 rerank)
+  refuse_threshold: 0.3         # top1 score 低于此值则提示模型拒答

@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+/mindbridge
+*.exe
+
+# Build output
+/dist/
+
+# Local environment / secrets
+.env
+configs/config.yaml
+configs/config.local.yaml
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Go
+vendor/
+*.test
+*.out
