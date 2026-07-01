@@ -10,16 +10,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.uber.org/zap"
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/doc"
 	"github.com/JexKnox/mindbridge/internal/kb"
+	"github.com/JexKnox/mindbridge/internal/logging"
 )
 
 // Deps 是 handler 的依赖集合,启动时在 main 装配。
 type Deps struct {
 	Cfg      *config.Config
+	Logger   *zap.Logger
 	Qdrant   *adapter.QdrantClient
 	KB       *kb.Manager
 	Pipeline *doc.Pipeline
@@ -29,7 +32,7 @@ func New(d Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(logging.ZapLogger(d.Logger)) // 替代 middleware.Logger,统一走 zap
 	r.Use(middleware.Recoverer)
 
 	h := &handlers{deps: d}

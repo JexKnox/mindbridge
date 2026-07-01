@@ -34,3 +34,9 @@ rag:
   retrieve_top_k: 20            # 向量召回数量
   rerank_top_k: 6               # rerank 后保留(留接口,本期不实现 rerank)
   refuse_threshold: 0.3         # top1 score 低于此值则提示模型拒答
+
+logging:
+  level: "info"                 # debug/info/warn/error
+  encoding: "console"           # console(开发可读)或 json(生产机器可读)
+  outputs: ["stdout"]           # 输出路径,可加文件路径如 ["/var/log/mindbridge.log"]
+  error_outputs: ["stderr"]     # 错误输出路径

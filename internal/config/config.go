@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 
+	"github.com/JexKnox/mindbridge/internal/logging"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,6 +19,7 @@ type Config struct {
 	Models   ModelsConfig   `yaml:"models"`
 	Ingest   IngestConfig   `yaml:"ingest"`
 	RAG      RAGConfig      `yaml:"rag"`
+	Logging  logging.Config `yaml:"logging"`
 }
 
 type ServerConfig struct {
@@ -111,5 +113,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.RAG.RefuseThreshold <= 0 {
 		c.RAG.RefuseThreshold = 0.3
+	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
 	}
 }

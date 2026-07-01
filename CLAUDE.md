@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **后端**:Go + [eino](https://github.com/cloudwego/eino)(CloudWeGo 的 Go LLM 应用框架)+ eino-ext(扩展组件)
 - **向量数据库**:Qdrant(生产中小规模,单容器部署,Go SDK,eino-ext 原生支持)
+- **日志**:[zap](https://github.com/uber-go/zap)(结构化日志,`internal/logging` 统一构建 + chi 请求日志中间件)
 - **前端**:React + Vite + TypeScript + Ant Design(UI 库已定:Ant Design)
 - **模型接入**:统一通过 eino 的 `ChatModel` / `EmbeddingModel` 接口,支持三类 Provider:
   - OpenAI 兼容 API(火山引擎 Ark、DeepSeek、通义、智谱等大多兼容)
@@ -59,6 +60,7 @@ Chat 接口(带 kb_id) → Retriever(Qdrant,按 kb_id 取 collection) → [可�
 cmd/mindbridge/       入口:装配 + 启动 HTTP
 internal/
   config/             YAML 配置 + ${VAR} 环境变量替换
+  logging/            zap 日志器构建 + chi 请求日志中间件
   repo/               Postgres 连接池 + 迁移(embed.FS)
   adapter/            ★适配层:chat/embedding/indexer/retriever 工厂 + Qdrant REST 客户端
   kb/                 知识库领域:元信息 + 建库编排(探测维度 → 建 collection → 写元信息)
@@ -66,6 +68,7 @@ internal/
   rag/                在线查询:Retriever → Chat(流式) + 引用 + 拒答
   server/             chi HTTP handler(薄层)+ 前端静态托管(SPA 回退)
 frontend/            React + Vite + TS + Ant Design 前端(dist/ 由 Go 托管)
+deploy/              docker-compose:PostgreSQL + Qdrant 依赖服务
 configs/              配置示例
 ```
 

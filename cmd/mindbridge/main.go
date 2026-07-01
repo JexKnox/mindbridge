@@ -15,8 +15,10 @@ import (
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/doc"
 	"github.com/JexKnox/mindbridge/internal/kb"
+	"github.com/JexKnox/mindbridge/internal/logging"
 	"github.com/JexKnox/mindbridge/internal/repo"
 	"github.com/JexKnox/mindbridge/internal/server"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -25,21 +27,27 @@ func main() {
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		log.Fatalf("load config: %v", err) // logger 尚未构建,兜底用标准 log
 	}
+
+	logger, err := logging.New(cfg.Logging)
+	if err != nil {
+		log.Fatalf("build logger: %v", err)
+	}
+	defer logger.Sync()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	db, err := repo.Open(ctx, cfg.Postgres.DSN)
 	cancel()
 	if err != nil {
-		log.Fatalf("open postgres: %v", err)
+		logger.Fatal("open postgres", zap.Error(err))
 	}
 	defer db.Close()
 
 	migCtx, migCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := repo.Migrate(migCtx, db); err != nil {
 		migCancel()
-		log.Fatalf("migrate: %v", err)
+		logger.Fatal("migrate", zap.Error(err))
 	}
 	migCancel()
 
@@ -56,6 +64,7 @@ func main() {
 
 	handler := server.New(server.Deps{
 		Cfg:      cfg,
+		Logger:   logger,
 		Qdrant:   qdrant,
 		KB:       kbMgr,
 		Pipeline: pipeline,
@@ -68,20 +77,20 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("mindbridge listening on %s", cfg.Server.Addr)
+		logger.Info("mindbridge listening", zap.String("addr", cfg.Server.Addr))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+			logger.Fatal("listen", zap.Error(err))
 		}
 	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
-	log.Println("shutting down...")
+	logger.Info("shutting down...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown: %v", err)
+		logger.Error("shutdown", zap.Error(err))
 	}
 }
