@@ -1,0 +1,66 @@
+# mindbridge 依赖服务 docker-compose
+# 仅启动 PostgreSQL + Qdrant 两个依赖;应用本体由开发者本地 `make run` 启动。
+# 凭证默认值与 configs/config.example.yaml 完全对齐,
+#   把 configs/config.example.yaml 复制为 configs/config.yaml 即可开箱即连。
+#
+# 启动:   docker compose -f deploy/docker-compose.yml up -d
+# 停止:   docker compose -f deploy/docker-compose.yml down
+# 日志:   docker compose -f deploy/docker-compose.yml logs -f
+# 清数据: docker compose -f deploy/docker-compose.yml down -v
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mindbridge-postgres
+    restart: unless-stopped
+    networks:
+      - mindbridge-net
+    ports:
+      - "5432:5432"   # 映射到宿主机,供应用本机连接(DSN 中为 localhost:5432)
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mindbridge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mindbridge}
+      POSTGRES_DB: ${POSTGRES_DB:-mindbridge}
+    volumes:
+      - mindbridge-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${POSTGRES_USER:-mindbridge} -d ${POSTGRES_DB:-mindbridge}"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    container_name: mindbridge-qdrant
+    restart: unless-stopped
+    networks:
+      - mindbridge-net
+    ports:
+      - "6333:6333"   # 映射到宿主机,供应用本机连接(config 中为 localhost:6333)
+    volumes:
+      - mindbridge-qdrant-data:/qdrant/storage
+    # 本地单容器,默认不开认证:不设 QDRANT__SERVICE__API_KEY,
+    # 与 configs/config.example.yaml 中 qdrant.api_key 留空一致。
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        # 官方 qdrant 镜像不含 curl,改用 bash 的 /dev/tcp 探测端口(debian 基底自带 bash)。
+        - "bash -c 'exec 3<>/dev/tcp/localhost/6333' || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  mindbridge-net:
+    name: mindbridge-net
+    driver: bridge
+
+volumes:
+  mindbridge-pgdata:
+    name: mindbridge-pgdata
+  mindbridge-qdrant-data:
+    name: mindbridge-qdrant-data
