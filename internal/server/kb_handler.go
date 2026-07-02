@@ -1,41 +1,37 @@
 package server
 
 import (
-	"encoding/json"
-	"net/http"
+	"context"
+
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/common/utils"
 
 	"github.com/JexKnox/mindbridge/internal/kb"
 )
 
-func (h *handlers) createKB(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) createKB(ctx context.Context, c *app.RequestContext) {
 	var req kb.CreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body: "+err.Error())
+	if err := c.Bind(&req); err != nil {
+		writeErr(c, 400, "invalid body: "+err.Error())
 		return
 	}
-	k, err := h.deps.KB.Create(r.Context(), req)
+	k, err := h.deps.KB.Create(ctx, req)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErr(c, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, k)
+	c.JSON(201, k)
 }
 
-func (h *handlers) listKB(w http.ResponseWriter, r *http.Request) {
-	ks, err := h.deps.KB.List(r.Context())
+func (h *handlers) listKB(ctx context.Context, c *app.RequestContext) {
+	ks, err := h.deps.KB.List(ctx)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErr(c, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, ks)
+	c.JSON(200, ks)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+func writeErr(c *app.RequestContext, status int, msg string) {
+	c.JSON(status, utils.H{"error": msg})
 }

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 技术栈(已定,后续开发遵循)
 
-- **后端**:Go + [eino](https://github.com/cloudwego/eino)(CloudWeGo 的 Go LLM 应用框架)+ eino-ext(扩展组件)
+- **后端**:Go + [eino](https://github.com/cloudwego/eino)(CloudWeGo 的 Go LLM 应用框架)+ eino-ext(扩展组件)+ [Hertz](https://github.com/cloudwego/hertz)(CloudWeGo HTTP 框架,与 eino 同生态)
 - **向量数据库**:Qdrant(生产中小规模,单容器部署,Go SDK,eino-ext 原生支持)
 - **日志**:[zap](https://github.com/uber-go/zap)(结构化日志,`internal/logging` 统一构建 + chi 请求日志中间件)
 - **前端**:React + Vite + TypeScript + Ant Design(UI 库已定:Ant Design)
@@ -66,7 +66,7 @@ internal/
   kb/                 知识库领域:元信息 + 建库编排(探测维度 → 建 collection → 写元信息)
   doc/                离线索引:Loader → Splitter → Indexer
   rag/                在线查询:Retriever → Chat(流式) + 引用 + 拒答
-  server/             chi HTTP handler(薄层)+ 前端静态托管(SPA 回退)
+  server/             Hertz HTTP handler(薄层)+ 前端静态托管(SPA 回退)
 frontend/            React + Vite + TS + Ant Design 前端(dist/ 由 Go 托管)
 deploy/              docker-compose:PostgreSQL + Qdrant 依赖服务
 configs/              配置示例

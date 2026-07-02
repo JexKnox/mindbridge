@@ -1,22 +1,24 @@
-// Package server 是 HTTP 接口层:chi handler 只做参数解析与响应组装,
+// Package server 是 HTTP 接口层:Hertz handler 只做参数解析与响应组装,
 // 业务逻辑沉到 internal/ 下各包。知识库是头等概念,文档/对话接口都带 kb_id。
 package server
 
 import (
-	"net/http"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"go.uber.org/zap"
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/common/utils"
+	"github.com/hertz-contrib/requestid"
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/doc"
 	"github.com/JexKnox/mindbridge/internal/kb"
 	"github.com/JexKnox/mindbridge/internal/logging"
+	"go.uber.org/zap"
 )
 
 // Deps 是 handler 的依赖集合,启动时在 main 装配。
@@ -28,36 +30,35 @@ type Deps struct {
 	Pipeline *doc.Pipeline
 }
 
-func New(d Deps) http.Handler {
-	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(logging.ZapLogger(d.Logger)) // 替代 middleware.Logger,统一走 zap
-	r.Use(middleware.Recoverer)
+// New 装配 Hertz 路由并返回 *server.Hertz,由 main 调用 h.Spin() 启动。
+func New(d Deps) *server.Hertz {
+	h := server.Default(server.WithHostPorts(d.Cfg.Server.Addr))
 
-	h := &handlers{deps: d}
+	h.Use(requestid.New())
+	h.Use(logging.AccessLog(d.Logger))
 
-	r.Route("/api", func(r chi.Router) {
-		r.Get("/kb", h.listKB)
-		r.Post("/kb", h.createKB)
-		r.Post("/kb/{id}/documents", h.uploadDocument)
-		r.Post("/kb/{id}/chat", h.chat)
+	ctl := &handlers{deps: d}
+
+	// /api/kb:列表与建库。Hertz 的 Group + GET("/kb") 平铺注册,
+	// 避免子组 GET("/") 是否匹配无尾斜杠路径的歧义。
+	api := h.Group("/api")
+	api.GET("/kb", ctl.listKB)
+	api.POST("/kb", ctl.createKB)
+	api.POST("/kb/:id/documents", ctl.uploadDocument)
+	api.POST("/kb/:id/chat", ctl.chat)
+
+	h.GET("/healthz", func(ctx context.Context, c *app.RequestContext) {
+		c.Data(200, "text/plain", []byte("ok"))
 	})
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	// 前端静态托管:产物目录存在时服务,文件不存在回退 index.html(SPA)。
+	mountSPA(h, d.Cfg.Server.StaticDir)
 
-	// 前端静态托管:若产物目录存在,则服务其静态文件;
-	// 非文件路径(且不属于 /api、/healthz)回退到 index.html,支持前端路由刷新/深链。
-	mountSPA(r, d.Cfg.Server.StaticDir)
-
-	return r
+	return h
 }
 
 // mountSPA 注册前端静态文件服务。staticDir 不存在时静默跳过(纯后端开发场景)。
-func mountSPA(r chi.Router, staticDir string) {
+func mountSPA(h *server.Hertz, staticDir string) {
 	if staticDir == "" {
 		return
 	}
@@ -68,23 +69,17 @@ func mountSPA(r chi.Router, staticDir string) {
 	if err != nil {
 		abs = staticDir
 	}
-	fs := http.FileServer(http.Dir(abs))
+	indexHTML := filepath.Join(abs, "index.html")
 
-	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		// 拦截 API 路径,避免误返回 index.html 掩盖 404。
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
-			http.NotFound(w, r)
+	// Static 服务静态文件;NoRoute 兜底:非 /api 路径回退 index.html,支持前端路由刷新/深链。
+	h.Static("/", abs)
+	h.NoRoute(func(ctx context.Context, c *app.RequestContext) {
+		path := string(c.Path())
+		if strings.HasPrefix(path, "/api") {
+			c.JSON(404, utils.H{"error": "not found"})
 			return
 		}
-		// 文件不存在则回退 index.html(SPA 路由)。
-		full := filepath.Join(abs, filepath.Clean(r.URL.Path))
-		if _, err := os.Stat(full); os.IsNotExist(err) {
-			r2 := r.Clone(r.Context())
-			r2.URL.Path = "/"
-			fs.ServeHTTP(w, r2)
-			return
-		}
-		fs.ServeHTTP(w, r)
+		c.File(indexHTML)
 	})
 }
 

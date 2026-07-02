@@ -5,10 +5,6 @@ import (
 	"context"
 	"flag"
 	"log"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
@@ -29,6 +25,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err) // logger 尚未构建,兜底用标准 log
 	}
+
+	// Hertz 框架日志经 hlog 走官方 zap 后端,与业务日志同源。
+	logging.SetHlog(cfg.Logging)
 
 	logger, err := logging.New(cfg.Logging)
 	if err != nil {
@@ -62,7 +61,7 @@ func main() {
 		Separators:   cfg.Ingest.Separators,
 	})
 
-	handler := server.New(server.Deps{
+	h := server.New(server.Deps{
 		Cfg:      cfg,
 		Logger:   logger,
 		Qdrant:   qdrant,
@@ -70,27 +69,7 @@ func main() {
 		Pipeline: pipeline,
 	})
 
-	srv := &http.Server{
-		Addr:              cfg.Server.Addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	go func() {
-		logger.Info("mindbridge listening", zap.String("addr", cfg.Server.Addr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("listen", zap.Error(err))
-		}
-	}()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	logger.Info("shutting down...")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("shutdown", zap.Error(err))
-	}
+	logger.Info("mindbridge listening", zap.String("addr", cfg.Server.Addr))
+	// h.Spin() 内部处理 SIGINT/SIGTERM 优雅停机,无需手写信号监听。
+	h.Spin()
 }

@@ -1,12 +1,17 @@
-// Package logging 提供 zap 日志器的构建与 chi 请求日志中间件。
-// 业务/适配层只依赖 *zap.Logger,不感知具体配置来源;切换日志实现时改动集中在此包。
+// Package logging 提供 zap 日志器与 Hertz 的接入。
+// 业务/适配层只依赖 *zap.Logger(经 Deps 注入),不感知具体配置来源;
+// Hertz 框架日志则经 hlog 走官方 hertz-contrib/logger/zap 后端。
 package logging
 
 import (
-	"net/http"
+	"context"
+	"os"
 	"time"
 
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/cloudwego/hertz/pkg/common/hlog"
+	hzap "github.com/hertz-contrib/logger/zap"
+	"github.com/hertz-contrib/requestid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -19,64 +24,112 @@ type Config struct {
 	ErrorOutputs []string `yaml:"error_outputs"` // 错误输出路径,默认 ["stderr"]
 }
 
-// New 按 cfg 构建 zap.Logger。
-func New(cfg Config) (*zap.Logger, error) {
-	var level zapcore.Level
-	if err := level.UnmarshalText([]byte(cfg.Level)); err != nil || cfg.Level == "" {
-		level = zapcore.InfoLevel
+// parseLevel 解析 level 字符串为 zapcore.Level,空串默认 info。
+func parseLevel(s string) zapcore.Level {
+	var l zapcore.Level
+	if err := l.UnmarshalText([]byte(s)); err != nil || s == "" {
+		l = zapcore.InfoLevel
 	}
+	return l
+}
 
+func encoderFor(encoding string) zapcore.Encoder {
+	if encoding == "json" {
+		return zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
+	}
+	enc := zap.NewDevelopmentEncoderConfig()
+	enc.EncodeTime = zapcore.ISO8601TimeEncoder
+	return zapcore.NewConsoleEncoder(enc)
+}
+
+// newWriteSyncer 把配置里的路径列表转成 zapcore.WriteSyncer(stdout/stderr 直接连)。
+func newWriteSyncer(paths []string) zapcore.WriteSyncer {
+	if len(paths) == 0 {
+		return zapcore.AddSync(os.Stdout)
+	}
+	var ws []zapcore.WriteSyncer
+	for _, p := range paths {
+		switch p {
+		case "stdout":
+			ws = append(ws, zapcore.AddSync(os.Stdout))
+		case "stderr":
+			ws = append(ws, zapcore.AddSync(os.Stderr))
+		default:
+			if f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+				ws = append(ws, zapcore.AddSync(f))
+			}
+		}
+	}
+	if len(ws) == 0 {
+		return zapcore.AddSync(os.Stdout)
+	}
+	return zapcore.NewMultiWriteSyncer(ws...)
+}
+
+// New 构建 *zap.Logger,供业务/适配层(Deps)使用。
+func New(cfg Config) (*zap.Logger, error) {
+	level := parseLevel(cfg.Level)
 	encoding := cfg.Encoding
 	if encoding == "" {
 		encoding = "console"
 	}
-	outputs := cfg.Outputs
-	if len(outputs) == 0 {
-		outputs = []string{"stdout"}
-	}
-	errOutputs := cfg.ErrorOutputs
-	if len(errOutputs) == 0 {
-		errOutputs = []string{"stderr"}
-	}
-
 	zcfg := zap.NewProductionConfig()
 	zcfg.Level = zap.NewAtomicLevelAt(level)
 	zcfg.Encoding = encoding
-	zcfg.OutputPaths = outputs
-	zcfg.ErrorOutputPaths = errOutputs
-	zcfg.Sampling = nil // 不采样,避免开发态丢日志
+	zcfg.OutputPaths = cfg.Outputs
+	if len(zcfg.OutputPaths) == 0 {
+		zcfg.OutputPaths = []string{"stdout"}
+	}
+	zcfg.ErrorOutputPaths = cfg.ErrorOutputs
+	if len(zcfg.ErrorOutputPaths) == 0 {
+		zcfg.ErrorOutputPaths = []string{"stderr"}
+	}
+	zcfg.Sampling = nil
 	if encoding == "console" {
-		// console 编码用可读时间格式,而非 epoch 毫秒
 		zcfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	}
 	return zcfg.Build()
 }
 
-// ZapLogger 是基于 zap 的 chi 请求日志中间件,替代 middleware.Logger。
-// 按响应状态码分级:5xx Error、4xx Warn、其余 Info。
-func ZapLogger(logger *zap.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-			next.ServeHTTP(ww, r)
+// SetHlog 用 hertz-contrib/logger/zap 构建 hlog 后端并设为 Hertz 全局 logger。
+// 之后 Hertz 框架日志(启动、错误等)经 zap 输出,与业务日志同源。
+func SetHlog(cfg Config) {
+	level := parseLevel(cfg.Level)
+	encoding := cfg.Encoding
+	if encoding == "" {
+		encoding = "console"
+	}
+	logger := hzap.NewLogger(
+		hzap.WithCoreLevel(zap.NewAtomicLevelAt(level)),
+		hzap.WithCoreEnc(encoderFor(encoding)),
+		hzap.WithCoreWs(newWriteSyncer(cfg.Outputs)),
+	)
+	hlog.SetLogger(logger)
+}
 
-			fields := []zap.Field{
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.Int("status", ww.Status()),
-				zap.Int("bytes", ww.BytesWritten()),
-				zap.Duration("duration", time.Since(start)),
-				zap.String("request_id", middleware.GetReqID(r.Context())),
-			}
-			switch {
-			case ww.Status() >= 500:
-				logger.Error("http request", fields...)
-			case ww.Status() >= 400:
-				logger.Warn("http request", fields...)
-			default:
-				logger.Info("http request", fields...)
-			}
-		})
+// AccessLog 是 Hertz 请求日志中间件:按响应状态码分级(5xx Error/4xx Warn/其余 Info),
+// 字段含 method/path/status/bytes/duration/request_id。
+func AccessLog(logger *zap.Logger) app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		start := time.Now()
+		c.Next(ctx)
+
+		status := c.Response.StatusCode()
+		fields := []zap.Field{
+			zap.String("method", string(c.Method())),
+			zap.String("path", string(c.Path())),
+			zap.Int("status", status),
+			zap.Int("bytes", len(c.Response.BodyBytes())),
+			zap.Duration("duration", time.Since(start)),
+			zap.String("request_id", requestid.Get(c)),
+		}
+		switch {
+		case status >= 500:
+			logger.Error("http request", fields...)
+		case status >= 400:
+			logger.Warn("http request", fields...)
+		default:
+			logger.Info("http request", fields...)
+		}
 	}
 }
