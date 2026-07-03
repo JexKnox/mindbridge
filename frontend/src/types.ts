@@ -29,3 +29,27 @@ export interface Citation {
   chunk_index: number
   score: number
 }
+
+// agent 工具调用事件(tool_call/tool_result)。
+export interface ToolCall {
+  name: string
+  args?: string
+  result?: string
+  error?: string
+  status: 'running' | 'done' | 'error'
+}
+
+// mcp.Server
+export interface MCPServer {
+  id: string
+  name: string
+  transport: 'sse' | 'http'
+  endpoint: string
+  created_at: string
+}
+
+export interface CreateMCPServerRequest {
+  name: string
+  transport: 'sse' | 'http'
+  endpoint: string
+}

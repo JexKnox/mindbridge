@@ -19,6 +19,7 @@ type Config struct {
 	Models   ModelsConfig   `yaml:"models"`
 	Ingest   IngestConfig   `yaml:"ingest"`
 	RAG      RAGConfig      `yaml:"rag"`
+	Agent    AgentConfig    `yaml:"agent"`
 	Logging  logging.Config `yaml:"logging"`
 }
 
@@ -58,9 +59,24 @@ type IngestConfig struct {
 }
 
 type RAGConfig struct {
-	RetrieveTopK   int     `yaml:"retrieve_top_k"`
-	RerankTopK     int     `yaml:"rerank_top_k"`
+	RetrieveTopK    int     `yaml:"retrieve_top_k"`
+	RerankTopK      int     `yaml:"rerank_top_k"`
 	RefuseThreshold float64 `yaml:"refuse_threshold"`
+}
+
+// AgentConfig 描述 agent 链路(检索→决策→调工具→生成)的配置。
+// 与 rag 配置并列:rag 是固定"检索→生成",agent 是 agentic RAG + 工具调用。
+type AgentConfig struct {
+	MaxStep    int               `yaml:"max_step"`    // ReAct 最大步数,默认 24
+	MCPServers []MCPServerConfig `yaml:"mcp_servers"` // 配置文件种子,启动时 upsert 进 DB
+}
+
+// MCPServerConfig 描述一个外部 MCP server 的连接信息。
+// transport 当前支持 "sse" / "http"(stdio 留待后续)。
+type MCPServerConfig struct {
+	Name      string `yaml:"name"`
+	Transport string `yaml:"transport"`
+	Endpoint  string `yaml:"endpoint"`
 }
 
 // Load 从 path 读取 YAML 配置并替换其中的 ${VAR} 环境变量占位。
@@ -113,6 +129,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.RAG.RefuseThreshold <= 0 {
 		c.RAG.RefuseThreshold = 0.3
+	}
+	if c.Agent.MaxStep <= 0 {
+		c.Agent.MaxStep = 24
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"

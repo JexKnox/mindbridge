@@ -14,10 +14,12 @@ import (
 	"github.com/hertz-contrib/requestid"
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
+	"github.com/JexKnox/mindbridge/internal/agent"
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/doc"
 	"github.com/JexKnox/mindbridge/internal/kb"
 	"github.com/JexKnox/mindbridge/internal/logging"
+	mindmcp "github.com/JexKnox/mindbridge/internal/mcp"
 	"go.uber.org/zap"
 )
 
@@ -28,6 +30,8 @@ type Deps struct {
 	Qdrant   *adapter.QdrantClient
 	KB       *kb.Manager
 	Pipeline *doc.Pipeline
+	Agent    *agent.Service
+	MCPRepo  *mindmcp.Repo
 }
 
 // New 装配 Hertz 路由并返回 *server.Hertz,由 main 调用 h.Spin() 启动。
@@ -46,6 +50,14 @@ func New(d Deps) *server.Hertz {
 	api.POST("/kb", ctl.createKB)
 	api.POST("/kb/:id/documents", ctl.uploadDocument)
 	api.POST("/kb/:id/chat", ctl.chat)
+
+	// agent 链路(agentic RAG + 工具调用),与 RAG chat 路径并列、互不影响。
+	api.POST("/agent/chat", ctl.agentChat)
+
+	// MCP server 注册表 CRUD:agent 据此连接外部 MCP server。
+	api.GET("/mcp/servers", ctl.listMCPServers)
+	api.POST("/mcp/servers", ctl.createMCPServer)
+	api.DELETE("/mcp/servers/:id", ctl.deleteMCPServer)
 
 	h.GET("/healthz", func(ctx context.Context, c *app.RequestContext) {
 		c.Data(200, "text/plain", []byte("ok"))

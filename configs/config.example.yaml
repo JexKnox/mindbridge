@@ -35,6 +35,15 @@ rag:
   rerank_top_k: 6               # rerank 后保留(留接口,本期不实现 rerank)
   refuse_threshold: 0.3         # top1 score 低于此值则提示模型拒答
 
+agent:
+  max_step: 24                  # ReAct agent 最大步数(模型+工具往返)
+  # MCP server 种子:启动时 upsert 进 DB,之后可在前端增删。
+  # transport 支持 sse / http;endpoint 为 MCP server 的 SSE/HTTP URL。
+  mcp_servers: []
+    # - name: "demo"
+    #   transport: "sse"
+    #   endpoint: "http://localhost:12345/sse"
+
 logging:
   level: "info"                 # debug/info/warn/error
   encoding: "console"           # console(开发可读)或 json(生产机器可读)

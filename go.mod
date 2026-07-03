@@ -6,11 +6,13 @@ require (
 	github.com/cloudwego/eino v0.9.12
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260630024214-84091ffbdce4
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
+	github.com/cloudwego/eino-ext/components/tool/mcp v0.0.8
 	github.com/cloudwego/hertz v0.10.5
 	github.com/google/uuid v1.6.0
 	github.com/hertz-contrib/logger/zap v1.1.0
 	github.com/hertz-contrib/requestid v1.1.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/mark3labs/mcp-go v0.43.0
 	github.com/yuin/goldmark v1.8.2
 	go.uber.org/zap v1.28.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -31,6 +33,7 @@ require (
 	github.com/evanphx/json-patch v0.5.2 // indirect
 	github.com/fsnotify/fsnotify v1.5.4 // indirect
 	github.com/goph/emperror v0.17.2 // indirect
+	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -45,12 +48,14 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
+	github.com/spf13/cast v1.7.1 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/arch v0.15.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect

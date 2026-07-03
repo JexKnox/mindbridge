@@ -1,4 +1,11 @@
-import type { KB, CreateKBRequest, UploadResult, Citation } from './types'
+import type {
+  KB,
+  CreateKBRequest,
+  UploadResult,
+  Citation,
+  MCPServer,
+  CreateMCPServerRequest,
+} from './types'
 
 // 开发态走 Vite 代理(同源),生产态由 Go 直接托管,均为同源,故用相对路径。
 const API_BASE = ''
@@ -115,4 +122,100 @@ export async function chat(kbId: string, query: string, h: ChatHandlers): Promis
     }
   }
   if (buffer.trim()) dispatch(buffer)
+}
+
+// ===== agent 链路 =====
+
+export interface AgentChatHandlers {
+  onToken: (token: string) => void
+  onToolCall: (tc: { name: string; args?: string }) => void
+  onToolResult: (tc: { name: string; result?: string; error?: string }) => void
+  onError: (msg: string) => void
+}
+
+// agentChat 走 SSE:与 chat() 同样的解析,但多出 tool_call/tool_result/done 事件。
+// 服务端格式见 internal/server/agent_handler.go。
+export async function agentChat(
+  query: string,
+  kbId: string | null,
+  h: AgentChatHandlers,
+): Promise<void> {
+  const resp = await fetch(`${API_BASE}/api/agent/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(kbId ? { query, kb_id: kbId } : { query }),
+  })
+  if (!resp.ok || !resp.body) {
+    let msg = `HTTP ${resp.status}`
+    try {
+      msg = (await resp.json()).error || msg
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg)
+  }
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const dispatch = (raw: string) => {
+    let event = ''
+    const dataLines: string[] = []
+    for (const line of raw.split('\n')) {
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim()
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).replace(/^ /, ''))
+      }
+    }
+    if (dataLines.length === 0) return
+    const data = dataLines.join('\n')
+    if (event === 'tool_call') {
+      try {
+        h.onToolCall(JSON.parse(data))
+      } catch {
+        /* ignore */
+      }
+    } else if (event === 'tool_result') {
+      try {
+        h.onToolResult(JSON.parse(data))
+      } catch {
+        /* ignore */
+      }
+    } else if (event === 'error') {
+      h.onError(data)
+    } else if (event === 'done') {
+      /* 结束 */
+    } else {
+      h.onToken(data)
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      if (raw.trim()) dispatch(raw)
+    }
+  }
+  if (buffer.trim()) dispatch(buffer)
+}
+
+// ===== MCP server CRUD =====
+
+export function listMCPServers(): Promise<MCPServer[]> {
+  return request<MCPServer[]>('/api/mcp/servers')
+}
+
+export function createMCPServer(req: CreateMCPServerRequest): Promise<MCPServer> {
+  return request<MCPServer>('/api/mcp/servers', { method: 'POST', body: JSON.stringify(req) })
+}
+
+export function deleteMCPServer(id: string): Promise<void> {
+  return request<void>(`/api/mcp/servers/${id}`, { method: 'DELETE' })
 }
