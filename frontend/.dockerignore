@@ -1,0 +1,8 @@
+# 前端构建上下文排除:避免本地 node_modules / dist 污染镜像、拖慢构建。
+
+node_modules/
+dist/
+.git/
+.gitignore
+.DS_Store
+*.log

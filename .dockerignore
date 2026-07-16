@@ -1,0 +1,28 @@
+# 构建上下文排除:既加速构建(少传文件),又避免本地产物污染镜像。
+# 镜像内前端由 nginx 容器单独构建,Go 镜像不需要 frontend/。
+
+# 前端(镜像内不需要;nginx 容器另建)
+frontend/
+
+# 本地构建产物
+bin/
+frontend/dist/
+*.exe
+
+# 依赖与缓存
+vendor/
+node_modules/
+
+# 本地配置与密钥(不进镜像;运行时由 compose 挂载 config.yaml)
+configs/config.yaml
+configs/config.local.yaml
+.env
+deploy/.env
+
+# 编辑器/OS/版本库
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+*.log

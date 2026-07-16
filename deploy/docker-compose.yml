@@ -1,12 +1,13 @@
-# mindbridge 依赖服务 docker-compose
-# 仅启动 PostgreSQL + Qdrant 两个依赖;应用本体由开发者本地 `make run` 启动。
-# 凭证默认值与 configs/config.example.yaml 完全对齐,
-#   把 configs/config.example.yaml 复制为 configs/config.yaml 即可开箱即连。
+# mindbridge 全栈 docker-compose
+# 启动 PostgreSQL + Qdrant 依赖,以及 Go 后端(app)+ nginx 前端代理,一条命令拉起整套。
 #
-# 启动:   docker compose -f deploy/docker-compose.yml up -d
+# 启动:   docker compose -f deploy/docker-compose.yml up -d --build
 # 停止:   docker compose -f deploy/docker-compose.yml down
-# 日志:   docker compose -f deploy/docker-compose.yml logs -f
+# 日志:   docker compose -f deploy/docker-compose.yml logs -f app
 # 清数据: docker compose -f deploy/docker-compose.yml down -v
+#
+# 模型密钥从 deploy/.env 注入(见 .env.example)。
+# 仅依赖:docker compose -f deploy/docker-compose.yml up -d postgres qdrant
 
 services:
   postgres:
@@ -16,7 +17,7 @@ services:
     networks:
       - mindbridge-net
     ports:
-      - "5432:5432"   # 映射到宿主机,供应用本机连接(DSN 中为 localhost:5432)
+      - "5432:5432"   # 映射到宿主机,供本机 make run 连接(DSN 中为 localhost:5432)
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mindbridge}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mindbridge}
@@ -39,11 +40,9 @@ services:
     networks:
       - mindbridge-net
     ports:
-      - "6333:6333"   # 映射到宿主机,供应用本机连接(config 中为 localhost:6333)
+      - "6333:6333"   # 映射到宿主机,供本机 make run 连接(config 中为 localhost:6333)
     volumes:
       - mindbridge-qdrant-data:/qdrant/storage
-    # 本地单容器,默认不开认证:不设 QDRANT__SERVICE__API_KEY,
-    # 与 configs/config.example.yaml 中 qdrant.api_key 留空一致。
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -53,6 +52,57 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: mindbridge-app
+    container_name: mindbridge-app
+    restart: unless-stopped
+    networks:
+      - mindbridge-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      # 模型密钥 + DB 凭证由 .env 注入,经 config.docker.yaml 的 ${VAR} 占位替换。
+      POSTGRES_USER: ${POSTGRES_USER:-mindbridge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mindbridge}
+      POSTGRES_DB: ${POSTGRES_DB:-mindbridge}
+      CHAT_BASE_URL: ${CHAT_BASE_URL:-}
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-}
+      EMB_BASE_URL: ${EMB_BASE_URL:-}
+      EMB_API_KEY: ${EMB_API_KEY:-}
+      EMB_MODEL: ${EMB_MODEL:-}
+    volumes:
+      # 容器专用配置(主机名用 compose 服务名),挂载为运行配置。
+      - ../configs/config.docker.yaml:/app/configs/config.yaml:ro
+    # 健康检查:HTTP 探 /healthz。
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  nginx:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    image: mindbridge-nginx
+    container_name: mindbridge-nginx
+    restart: unless-stopped
+    networks:
+      - mindbridge-net
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "8080:80"   # 宿主机 8080 -> nginx 80。访问 http://localhost:8080 即前端,/api 反代到 app。
 
 networks:
   mindbridge-net:

@@ -1,0 +1,48 @@
+# mindbridge 容器编排专用配置
+# 由 docker compose 挂载到容器内 /app/configs/config.yaml。
+# 与 config.example.yaml 的差异:postgres/qdrant 主机用 compose 服务名(同网络互通用名),
+# 凭证与模型密钥走环境变量(.env 注入),静态托管留空(前端由 nginx 容器提供)。
+
+server:
+  addr: ":8080"
+  static_dir: ""   # 容器编排:前端由 nginx 托管,Go 不托管静态
+
+postgres:
+  dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+
+qdrant:
+  host: "qdrant"    # compose 服务名
+  port: 6333
+  # api_key: "${QDRANT_API_KEY}"  # 本地单容器不开认证
+
+models:
+  chat:
+    provider: openai
+    base_url: "${CHAT_BASE_URL}"
+    api_key: "${CHAT_API_KEY}"
+    model: "${CHAT_MODEL}"
+  embedding:
+    provider: openai
+    base_url: "${EMB_BASE_URL}"
+    api_key: "${EMB_API_KEY}"
+    model: "${EMB_MODEL}"
+
+ingest:
+  chunk_size: 400
+  chunk_overlap: 80
+  separators: ["\n\n", "\n", " "]
+
+rag:
+  retrieve_top_k: 20
+  rerank_top_k: 6
+  refuse_threshold: 0.3
+
+agent:
+  max_step: 24
+  mcp_servers: []
+
+logging:
+  level: "info"
+  encoding: "console"
+  outputs: ["stdout"]
+  error_outputs: ["stderr"]
