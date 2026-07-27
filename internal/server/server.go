@@ -15,6 +15,7 @@ import (
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
 	"github.com/JexKnox/mindbridge/internal/agent"
+	"github.com/JexKnox/mindbridge/internal/cache"
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/doc"
 	"github.com/JexKnox/mindbridge/internal/kb"
@@ -32,6 +33,7 @@ type Deps struct {
 	Pipeline *doc.Pipeline
 	Agent    *agent.Service
 	MCPRepo  *mindmcp.Repo
+	Caches   *cache.RAGCaches
 }
 
 // New 装配 Hertz 路由并返回 *server.Hertz,由 main 调用 h.Spin() 启动。

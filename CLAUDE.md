@@ -61,6 +61,7 @@ cmd/mindbridge/       入口:装配 + 启动 HTTP
 internal/
   config/             YAML 配置 + ${VAR} 环境变量替换
   logging/            zap 日志器构建 + chi 请求日志中间件
+  cache/              进程内缓存:泛型 LRU(容量+TTL)+ KB 版本号(检索缓存失效)
   repo/               Postgres 连接池 + 迁移(embed.FS)
   adapter/            ★适配层:chat/embedding/indexer/retriever 工厂 + Qdrant REST 客户端
   kb/                 知识库领域:元信息 + 建库编排(探测维度 → 建 collection → 写元信息)
@@ -106,4 +107,13 @@ configs/              配置示例
  - collection 创建时为 `source_file`、`kb_id` 建 payload keyword 索引。已落地:`internal/adapter/qdrant.go`。
  - 重新上传同名文件:先按 `source_file` 删旧 chunk 再写新,避免幽灵数据。已落地:`internal/server/doc_handler.go`。
  - 批量 embedding / Qdrant upsert 分批 + 指数退避重试(`ingest.embed_batch` / `ingest.upsert_batch`)。已落地:`internal/adapter/indexer.go`。
+
+8. **缓存(已落地,`internal/cache`)**
+ - 进程内缓存,不引入 Redis(单实例部署够用;多副本时再换实现)。main 构造一份 `cache.RAGCaches`,注入 server 与 agent。三层:
+   - **查询 embedding 缓存**:key = `emb:{模型名}:{sha256(文本)}`,2048 条 × 1h。只包在查询侧(`adapter.NewCachedEmbedder` 装饰 retriever 的 embedder),文档摄取侧不缓存(内容不重复,徒耗内存)。
+   - **改写结果缓存**:key = `rw:{n}:{sha256(query)}`,512 条 × 1h;改写失败的降级结果不缓存。
+   - **检索+重排结果缓存**:缓存「改写→召回→重排」后的最终文档列表 + 重排前最高余弦分(拒答判断用),256 条 × 15min。命中时整段跳过。key 前缀 = `ret:{collection}:v{kb_version}:{检索配置}`(见 `internal/server/chat_handler.go`)。
+ - **失效策略**:key 携带 KB 版本号(`cache.Versions`,进程内计数器),上传/删除文档时 `Bump`,旧版本条目查不到、随 LRU 自然淘汰,无需主动清理;调参后 key 前缀变化同理。版本号重启归零,与进程内缓存生命周期一致。
+ - **不做最终答案缓存**:回答是流式 + 引用,语义缓存命中错答案的风险大于收益。
+ - Rerank 不单独设缓存层:检索结果缓存存的就是重排后结果,一层顶两层。
 

@@ -10,6 +10,8 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/JexKnox/mindbridge/internal/cache"
 )
 
 // Citation 是返回给前端的来源引用。
@@ -24,13 +26,21 @@ type Reranker interface {
 	Rerank(ctx context.Context, query string, docs []*schema.Document) ([]*schema.Document, error)
 }
 
-// Options 汇总 Service 的可调参数。Reranker / 改写模型为 nil 时对应环节自动跳过。
+// Options 汇总 Service 的可调参数。Reranker / 改写模型 / 缓存为 nil 时对应环节自动跳过。
 type Options struct {
 	RewriteModel model.ChatModel // query 改写用小模型,nil 禁用改写
 	RewriteN     int             // 改写 query 数(不含原 query)
 	Reranker     Reranker        // nil 时退化为按融合序截断
 	RerankTopK   int             // 重排/截断后保留的文档数
 	Refuse       float64         // top1 余弦分低于此值则提示模型拒答
+
+	// RewriteCache 缓存改写结果(同一问题改写基本稳定)。
+	RewriteCache *cache.LRU[[]string]
+	// RetrievalCache 缓存「改写→召回→重排」后的最终文档列表,命中时整段跳过。
+	// CacheKeyPrefix 由调用方拼好,须含 kb collection、KB 版本号与检索配置,
+	// 保证文档变更(版本自增)或调参后旧缓存不再命中。
+	RetrievalCache *cache.LRU[cache.RetrievalEntry]
+	CacheKeyPrefix string
 }
 
 // Service 编排检索 + 生成。检索范围由传入的 retriever 决定(已绑定到 kb_id 对应 collection),
@@ -42,40 +52,29 @@ type Service struct {
 	reranker   Reranker
 	rerankTopK int
 	refuse     float64
+
+	retrievalCache *cache.LRU[cache.RetrievalEntry]
+	cacheKeyPrefix string
 }
 
 func NewService(r retriever.Retriever, chat model.ChatModel, opts Options) *Service {
 	return &Service{
-		retriever:  r,
-		chat:       chat,
-		rewriter:   NewQueryRewriter(opts.RewriteModel, opts.RewriteN),
-		reranker:   opts.Reranker,
-		rerankTopK: opts.RerankTopK,
-		refuse:     opts.Refuse,
+		retriever:      r,
+		chat:           chat,
+		rewriter:       NewQueryRewriter(opts.RewriteModel, opts.RewriteN, opts.RewriteCache),
+		reranker:       opts.Reranker,
+		rerankTopK:     opts.RerankTopK,
+		refuse:         opts.Refuse,
+		retrievalCache: opts.RetrievalCache,
+		cacheKeyPrefix: opts.CacheKeyPrefix,
 	}
 }
 
 // Answer 流式生成回答。onToken 用于逐 token 回推前端(SSE);返回完整引用列表。
 func (s *Service) Answer(ctx context.Context, query string, onToken func(string)) ([]Citation, error) {
-	// 多路改写并行召回:原 query + 改写 query 各自检索,去重后 RRF 合并。
-	queries := s.rewriter.Rewrite(ctx, query)
-	docs, err := s.retrieveAll(ctx, queries)
+	docs, maxScore, err := s.retrieveWithCache(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("rag: retrieve: %w", err)
-	}
-
-	// 拒答判断基于重排前的最高余弦分:重排分数量纲不同,且重排只影响排序不改相关性事实。
-	maxScore := topScore(docs)
-
-	if s.reranker != nil && len(docs) > 0 {
-		reranked, err := s.reranker.Rerank(ctx, query, docs)
-		if err == nil {
-			docs = reranked
-		}
-		// 重排失败静默降级为融合序截断,不阻断回答。
-	}
-	if s.rerankTopK > 0 && len(docs) > s.rerankTopK {
-		docs = docs[:s.rerankTopK]
 	}
 
 	cits := make([]Citation, 0, len(docs))
@@ -122,6 +121,45 @@ func (s *Service) Answer(ctx context.Context, query string, onToken func(string)
 		}
 	}
 	return cits, nil
+}
+
+// retrieveWithCache 执行「改写 → 多路召回 → 重排/截断」,可选结果缓存。
+// 缓存命中时整段跳过(省 1+N 次 embedding、N 次向量检索、1 次改写和 1 次重排调用);
+// 返回的 maxScore 为重排前的最高余弦分,供拒答阈值判断。
+func (s *Service) retrieveWithCache(ctx context.Context, query string) ([]*schema.Document, float64, error) {
+	var cacheKey string
+	if s.retrievalCache != nil {
+		cacheKey = s.cacheKeyPrefix + ":" + cache.Hash(query)
+		if ent, ok := s.retrievalCache.Get(cacheKey); ok {
+			return ent.Docs, ent.MaxScore, nil
+		}
+	}
+
+	// 多路改写并行召回:原 query + 改写 query 各自检索,去重后 RRF 合并。
+	queries := s.rewriter.Rewrite(ctx, query)
+	docs, err := s.retrieveAll(ctx, queries)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 拒答判断基于重排前的最高余弦分:重排分数量纲不同,且重排只影响排序不改相关性事实。
+	maxScore := topScore(docs)
+
+	if s.reranker != nil && len(docs) > 0 {
+		reranked, err := s.reranker.Rerank(ctx, query, docs)
+		if err == nil {
+			docs = reranked
+		}
+		// 重排失败静默降级为融合序截断,不阻断回答。
+	}
+	if s.rerankTopK > 0 && len(docs) > s.rerankTopK {
+		docs = docs[:s.rerankTopK]
+	}
+
+	if s.retrievalCache != nil {
+		s.retrievalCache.Set(cacheKey, cache.RetrievalEntry{Docs: docs, MaxScore: maxScore})
+	}
+	return docs, maxScore, nil
 }
 
 // retrieveAll 对每个 query 召回一次,跨 query 去重后按 RRF 融合排序。

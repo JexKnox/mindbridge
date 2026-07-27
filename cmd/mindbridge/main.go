@@ -10,6 +10,7 @@ import (
 	"github.com/JexKnox/mindbridge/internal/adapter"
 	"github.com/JexKnox/mindbridge/internal/agent"
 	"github.com/JexKnox/mindbridge/internal/agent/skills"
+	"github.com/JexKnox/mindbridge/internal/cache"
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/doc"
 	"github.com/JexKnox/mindbridge/internal/kb"
@@ -75,7 +76,11 @@ func main() {
 	if err != nil {
 		logger.Fatal("build skills", zap.Error(err))
 	}
-	agentSvc := agent.NewService(cfg.RAG.RetrieveTopK, sk, mcpRepo, qdrant, logger)
+
+	// RAG 链路进程内缓存:查询向量 / 改写结果 / 检索结果,全局一份、各请求复用。
+	caches := cache.NewRAGCaches()
+
+	agentSvc := agent.NewService(cfg.RAG.RetrieveTopK, sk, mcpRepo, qdrant, logger, caches)
 
 	h := server.New(server.Deps{
 		Cfg:      cfg,
@@ -85,6 +90,7 @@ func main() {
 		Pipeline: pipeline,
 		Agent:    agentSvc,
 		MCPRepo:  mcpRepo,
+		Caches:   caches,
 	})
 
 	logger.Info("mindbridge listening", zap.String("addr", cfg.Server.Addr))

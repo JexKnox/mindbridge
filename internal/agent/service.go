@@ -22,6 +22,7 @@ import (
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
 	"github.com/JexKnox/mindbridge/internal/agent/skills"
+	"github.com/JexKnox/mindbridge/internal/cache"
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/kb"
 	mindmcp "github.com/JexKnox/mindbridge/internal/mcp"
@@ -39,15 +40,18 @@ type Service struct {
 	mcpRepo *mindmcp.Repo
 	qdrant  *adapter.QdrantClient
 	logger  *zap.Logger
+	caches  *cache.RAGCaches
 }
 
 // NewService 装配 agent 服务。chatCfg/embCfg 在每次请求时由 handler 传入(与 rag 路径一致)。
+// caches 可为 nil(不启用查询向量缓存)。
 func NewService(
 	topK int,
 	sk *skills.Skills,
 	mcpRepo *mindmcp.Repo,
 	qdrant *adapter.QdrantClient,
 	logger *zap.Logger,
+	caches *cache.RAGCaches,
 ) *Service {
 	return &Service{
 		topK:    topK,
@@ -55,6 +59,7 @@ func NewService(
 		mcpRepo: mcpRepo,
 		qdrant:  qdrant,
 		logger:  logger,
+		caches:  caches,
 	}
 }
 
@@ -184,6 +189,9 @@ func (s *Service) newKBSearchTool(ctx context.Context, embCfg config.ModelConfig
 	emb, err := adapter.NewEmbedder(ctx, embCfg)
 	if err != nil {
 		return nil, fmt.Errorf("build embedder: %w", err)
+	}
+	if s.caches != nil {
+		emb = adapter.NewCachedEmbedder(emb, embCfg.Model, s.caches.Embedding)
 	}
 	ret := adapter.NewRetriever(s.qdrant, emb, k.Collection, s.topK, true)
 

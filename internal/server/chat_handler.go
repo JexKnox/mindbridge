@@ -46,6 +46,8 @@ func (h *handlers) chat(ctx context.Context, c *app.RequestContext) {
 		writeErr(c, 500, "build embedder: "+err.Error())
 		return
 	}
+	// 查询向量缓存:相同问题(含改写)不重复调 embedding API。
+	emb = adapter.NewCachedEmbedder(emb, embCfg.Model, h.deps.Caches.Embedding)
 	ragCfg := h.deps.Cfg.RAG
 	ret := adapter.NewRetriever(h.deps.Qdrant, emb, k.Collection, ragCfg.RetrieveTopK, ragCfg.HybridEnabled())
 	chat, err := adapter.NewChatModel(ctx, h.deps.Cfg.Models.Chat)
@@ -54,9 +56,18 @@ func (h *handlers) chat(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// 检索结果缓存 key 前缀:collection + KB 版本号 + 检索配置。
+	// 文档变更时版本自增,旧缓存自然失效;调参后前缀变化,同样不会命中旧结果。
+	cacheKeyPrefix := fmt.Sprintf("ret:%s:v%d:k%d-r%d-h%v-rw%d",
+		k.Collection, h.deps.Caches.KBVersion.Get(k.ID),
+		ragCfg.RetrieveTopK, ragCfg.RerankTopK, ragCfg.HybridEnabled(), ragCfg.RewriteN)
+
 	opts := rag.Options{
-		RerankTopK: ragCfg.RerankTopK,
-		Refuse:     ragCfg.RefuseThreshold,
+		RerankTopK:     ragCfg.RerankTopK,
+		Refuse:         ragCfg.RefuseThreshold,
+		RewriteCache:   h.deps.Caches.Rewrite,
+		RetrievalCache: h.deps.Caches.Retrieval,
+		CacheKeyPrefix: cacheKeyPrefix,
 	}
 	// cross-encoder 重排:配置了 reranker 模型才启用,失败时服务内部自动降级。
 	if h.deps.Cfg.Models.Reranker.Model != "" {

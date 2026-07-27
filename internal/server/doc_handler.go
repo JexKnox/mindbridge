@@ -60,6 +60,8 @@ func (h *handlers) uploadDocument(ctx context.Context, c *app.RequestContext) {
 		writeErr(c, 500, err.Error())
 		return
 	}
+	// 文档已变更:KB 版本自增,使该库的检索结果缓存整体失效。
+	h.deps.Caches.KBVersion.Bump(k.ID)
 	c.JSON(200, utils.H{
 		"kb_id":      k.ID,
 		"file":       header.Filename,
