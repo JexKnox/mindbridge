@@ -38,6 +38,10 @@ func main() {
 	kbID := flag.String("kb", "", "knowledge base id (required)")
 	evalPath := flag.String("eval", "", "eval set path, JSONL (required)")
 	topK := flag.Int("k", 5, "evaluate metrics at top-k")
+	// 回归门槛:低于任一阈值则以非零码退出,接入 CI 可阻止发布(离线回归评测防线)。
+	minRecall := flag.Float64("min-recall", 0, "fail if recall@k below this threshold (0 = no gate)")
+	minMRR := flag.Float64("min-mrr", 0, "fail if MRR below this threshold (0 = no gate)")
+	minHit := flag.Float64("min-hit", 0, "fail if hit@k below this threshold (0 = no gate)")
 	flag.Parse()
 	if *kbID == "" || *evalPath == "" {
 		flag.Usage()
@@ -117,10 +121,26 @@ func main() {
 	}
 
 	n := float64(len(cases))
+	recall, mrr, hit := sumRecall/n, sumMRR/n, float64(hits)/n
 	fmt.Printf("\n===== 汇总 =====\n")
-	fmt.Printf("recall@%d = %.4f\n", *topK, sumRecall/n)
-	fmt.Printf("MRR      = %.4f\n", sumMRR/n)
-	fmt.Printf("hit@%d    = %.4f (%d/%d)\n", *topK, float64(hits)/n, hits, len(cases))
+	fmt.Printf("recall@%d = %.4f\n", *topK, recall)
+	fmt.Printf("MRR      = %.4f\n", mrr)
+	fmt.Printf("hit@%d    = %.4f (%d/%d)\n", *topK, hit, hits, len(cases))
+
+	// 门槛检查:任一指标不达标即失败退出,CI 据此阻止发布。
+	failed := false
+	check := func(name string, got, min float64) {
+		if min > 0 && got < min {
+			failed = true
+			fmt.Printf("FAIL: %s %.4f < 门槛 %.4f\n", name, got, min)
+		}
+	}
+	check("recall", recall, *minRecall)
+	check("mrr", mrr, *minMRR)
+	check("hit", hit, *minHit)
+	if failed {
+		os.Exit(1)
+	}
 }
 
 func loadCases(path string) ([]evalCase, error) {

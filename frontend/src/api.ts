@@ -5,6 +5,8 @@ import type {
   Citation,
   MCPServer,
   CreateMCPServerRequest,
+  FeedbackCategory,
+  StatsOverview,
 } from './types'
 
 // 开发态走 Vite 代理(同源),生产态由 Go 直接托管,均为同源,故用相对路径。
@@ -59,6 +61,8 @@ export interface ChatHandlers {
   onToken: (token: string) => void
   onCitations: (citations: Citation[]) => void
   onError: (msg: string) => void
+  // 服务端在回答结束后推 trace_id(问答留痕),用于提交反馈。
+  onTrace?: (traceId: string) => void
 }
 
 // chat 走 SSE:POST + 流式读取(EventSource 不支持 POST,故用 fetch + ReadableStream)。
@@ -100,6 +104,12 @@ export async function chat(kbId: string, query: string, h: ChatHandlers): Promis
     if (event === 'citations') {
       try {
         h.onCitations(JSON.parse(data))
+      } catch {
+        /* ignore malformed */
+      }
+    } else if (event === 'trace') {
+      try {
+        h.onTrace?.(JSON.parse(data).trace_id)
       } catch {
         /* ignore malformed */
       }
@@ -204,6 +214,25 @@ export async function agentChat(
     }
   }
   if (buffer.trim()) dispatch(buffer)
+}
+
+// ===== 质量闭环:反馈 + 统计 =====
+
+export function sendFeedback(
+  traceId: string,
+  category: FeedbackCategory,
+  comment = '',
+): Promise<void> {
+  return request<void>('/api/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ trace_id: traceId, category, comment }),
+  })
+}
+
+export function fetchStats(days = 30, kbId = ''): Promise<StatsOverview> {
+  const params = new URLSearchParams({ days: String(days) })
+  if (kbId) params.set('kb_id', kbId)
+  return request<StatsOverview>(`/api/stats/overview?${params}`)
 }
 
 // ===== MCP server CRUD =====

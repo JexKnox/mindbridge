@@ -3,6 +3,7 @@ import { Layout, Typography, Space, Button } from 'antd'
 import KBList from './pages/KBList'
 import KBDetail from './pages/KBDetail'
 import AgentPage from './pages/AgentPage'
+import StatsPage from './pages/StatsPage'
 
 const { Header, Content } = Layout
 const { Title } = Typography
@@ -11,6 +12,7 @@ export default function App() {
   const nav = useNavigate()
   const loc = useLocation()
   const onAgent = loc.pathname.startsWith('/agent')
+  const onStats = loc.pathname.startsWith('/stats')
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -29,11 +31,14 @@ export default function App() {
           通用 RAG 知识库
         </span>
         <Space style={{ marginLeft: 'auto' }}>
-          <Button type={onAgent ? 'primary' : 'default'} onClick={() => nav('/kb')}>
+          <Button type={!onAgent && !onStats ? 'primary' : 'default'} onClick={() => nav('/kb')}>
             知识库
           </Button>
           <Button type={onAgent ? 'primary' : 'default'} onClick={() => nav('/agent')}>
             Agent
+          </Button>
+          <Button type={onStats ? 'primary' : 'default'} onClick={() => nav('/stats')}>
+            统计
           </Button>
         </Space>
       </Header>
@@ -43,6 +48,7 @@ export default function App() {
           <Route path="/kb" element={<KBList />} />
           <Route path="/kb/:id" element={<KBDetail />} />
           <Route path="/agent" element={<AgentPage />} />
+          <Route path="/stats" element={<StatsPage />} />
         </Routes>
       </Content>
     </Layout>

@@ -30,6 +30,36 @@ export interface Citation {
   score: number
 }
 
+// 用户反馈分类(与后端 internal/trace 对齐):分类后的反馈才能进入下一轮评测集。
+export type FeedbackCategory =
+  | 'helpful'
+  | 'not_found'
+  | 'outdated'
+  | 'irrelevant'
+  | 'not_actionable'
+  | 'other'
+
+export const FEEDBACK_OPTIONS: { value: FeedbackCategory; label: string }[] = [
+  { value: 'helpful', label: '有帮助' },
+  { value: 'not_found', label: '没找到资料' },
+  { value: 'outdated', label: '资料过期' },
+  { value: 'irrelevant', label: '答非所问' },
+  { value: 'not_actionable', label: '步骤不可执行' },
+  { value: 'other', label: '其他' },
+]
+
+// 统计总览(GET /api/stats/overview)。
+export interface StatsOverview {
+  days: number
+  answers: number
+  refusals: number
+  avg_top_score: number
+  judged_count: number
+  avg_judge_score: number
+  feedback: { category: string; count: number }[]
+  daily: { day: string; answers: number; refused: number }[]
+}
+
 // agent 工具调用事件(tool_call/tool_result)。
 export interface ToolCall {
   name: string

@@ -23,6 +23,7 @@ import (
 	"github.com/JexKnox/mindbridge/internal/logging"
 	mindmcp "github.com/JexKnox/mindbridge/internal/mcp"
 	"github.com/JexKnox/mindbridge/internal/metrics"
+	"github.com/JexKnox/mindbridge/internal/trace"
 	"go.uber.org/zap"
 )
 
@@ -36,6 +37,7 @@ type Deps struct {
 	Agent    *agent.Service
 	MCPRepo  *mindmcp.Repo
 	Caches   *cache.RAGCaches
+	Traces   *trace.Repo
 }
 
 // New 装配 Hertz 路由并返回 *server.Hertz,由 main 调用 h.Spin() 启动。
@@ -63,6 +65,11 @@ func New(d Deps) *server.Hertz {
 	api.GET("/mcp/servers", ctl.listMCPServers)
 	api.POST("/mcp/servers", ctl.createMCPServer)
 	api.DELETE("/mcp/servers/:id", ctl.deleteMCPServer)
+
+	// 质量闭环:用户反馈 + 统计总览 + 评测集导出。
+	api.POST("/feedback", ctl.createFeedback)
+	api.GET("/stats/overview", ctl.statsOverview)
+	api.GET("/stats/export", ctl.exportEval)
 
 	h.GET("/healthz", func(ctx context.Context, c *app.RequestContext) {
 		c.Data(200, "text/plain", []byte("ok"))

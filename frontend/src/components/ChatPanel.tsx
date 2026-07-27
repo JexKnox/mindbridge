@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Input, Button, Tag, Typography, Space, App as AntdApp, Empty } from 'antd'
 import { SendOutlined } from '@ant-design/icons'
-import { chat } from '../api'
-import type { KB, Citation } from '../types'
+import { chat, sendFeedback } from '../api'
+import { FEEDBACK_OPTIONS } from '../types'
+import type { KB, Citation, FeedbackCategory } from '../types'
 
 const { Text } = Typography
 
@@ -15,6 +16,8 @@ interface Msg {
   content: string
   citations?: Citation[]
   error?: boolean
+  traceId?: string
+  feedbackSent?: boolean
 }
 
 export default function ChatPanel({ kb }: Props) {
@@ -55,6 +58,13 @@ export default function ChatPanel({ kb }: Props) {
             return next
           })
         },
+        onTrace: (traceId) => {
+          setMsgs((prev) => {
+            const next = [...prev]
+            next[asstIdx] = { ...next[asstIdx], traceId }
+            return next
+          })
+        },
         onError: (msg) => {
           setMsgs((prev) => {
             const next = [...prev]
@@ -80,6 +90,21 @@ export default function ChatPanel({ kb }: Props) {
       })
     } finally {
       setStreaming(false)
+    }
+  }
+
+  // 用户反馈闭环:分类反馈(而非只点踩),分类后的反馈才能沉淀为评测集。
+  const giveFeedback = async (msgIdx: number, traceId: string, category: FeedbackCategory) => {
+    try {
+      await sendFeedback(traceId, category)
+      setMsgs((prev) => {
+        const next = [...prev]
+        next[msgIdx] = { ...next[msgIdx], feedbackSent: true }
+        return next
+      })
+      message.success('感谢反馈')
+    } catch (e) {
+      message.error(`提交反馈失败:${(e as Error).message}`)
     }
   }
 
@@ -134,6 +159,27 @@ export default function ChatPanel({ kb }: Props) {
                           </Tag>
                         ))}
                       </Space>
+                    </div>
+                  )}
+                  {m.role === 'assistant' && m.traceId && !m.error && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+                      {m.feedbackSent ? (
+                        <Text style={{ fontSize: 12, color: '#888' }}>已收到反馈</Text>
+                      ) : (
+                        <Space size={4} wrap>
+                          <Text style={{ fontSize: 12, color: '#888' }}>这个回答:</Text>
+                          {FEEDBACK_OPTIONS.map((opt) => (
+                            <Tag.CheckableTag
+                              key={opt.value}
+                              checked={false}
+                              style={{ fontSize: 12, border: '1px solid #d9d9d9' }}
+                              onChange={() => giveFeedback(i, m.traceId!, opt.value)}
+                            >
+                              {opt.label}
+                            </Tag.CheckableTag>
+                          ))}
+                        </Space>
+                      )}
                     </div>
                   )}
                 </div>

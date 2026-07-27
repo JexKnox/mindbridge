@@ -57,6 +57,16 @@ agent:
 metrics:
   addr: ":9091"   # Prometheus 抓取端点;compose 内可加 prometheus 服务抓 mindbridge:9091
 
+judge:
+  model:
+    provider: openai
+    base_url: "${JUDGE_BASE_URL}"
+    api_key: "${JUDGE_API_KEY}"
+    model: "${JUDGE_MODEL}"     # 留空禁用线上抽样评测
+  sample_rate: 0.2
+  interval_seconds: 60
+  batch: 8
+
 logging:
   level: "info"
   encoding: "console"

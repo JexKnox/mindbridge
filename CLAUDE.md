@@ -63,6 +63,8 @@ internal/
   logging/            zap 日志器构建 + chi 请求日志中间件
   cache/              进程内缓存:泛型 LRU(容量+TTL)+ KB 版本号(检索缓存失效)
   metrics/            Prometheus 指标(系统/检索/生成三层)+ /metrics 独立端口
+  trace/              问答留痕 + 用户反馈 + 质量统计(chat_traces / chat_feedback)
+  judge/              LLM Judge 线上抽样评测(faithfulness 写回 trace)
   repo/               Postgres 连接池 + 迁移(embed.FS)
   adapter/            ★适配层:chat/embedding/indexer/retriever 工厂 + Qdrant REST 客户端
   kb/                 知识库领域:元信息 + 建库编排(探测维度 → 建 collection → 写元信息)
@@ -98,10 +100,12 @@ configs/              配置示例
 5. **生成阶段:流式 + 引用 + 拒答**
    - SSE 流式逐 token;prompt 注入带 `[1][2]` 编号的召回 chunk 要求标注;top1 score < 阈值则提示拒答;SSE 末尾发 `event:citations`。骨架已落地:`internal/rag/service.go` + `internal/server/chat_handler.go`。
 
-6. **评估闭环**
- - 每个知识库建 20–50 条标准 Q&A eval set;换模型/调参前后跑一遍用数字说话。
- - 检索指标已落地:`go run ./cmd/mindbridge-eval -kb <id> -eval evalset.jsonl -k 5` 输出 recall@k / MRR / hit@k,评估集为 JSONL(`{"question":..., "relevant_files":[...]}`)。
- - TODO:生成指标(faithfulness、answer relevance,RAGAS 思路)。
+6. **评估闭环(三道防线,已落地)**
+ - **离线回归评测**:`go run ./cmd/mindbridge-eval -kb <id> -eval evalset.jsonl -k 5` 输出 recall@k / MRR / hit@k;加 `-min-recall 0.8 -min-mrr 0.6` 等门槛参数,不达标非零退出,接 CI 阻止发布。评估集为 JSONL(`{"question":..., "relevant_files":[...]}`)。
+ - **问答留痕**:每次 RAG 问答异步存 `chat_traces`(query/证据 chunk/回答/引用/分数/拒答/耗时),SSE 末尾发 `event:trace` 携带 trace_id。见 `internal/trace` + `internal/server/chat_handler.go`。
+ - **线上抽样评测**:配置 `judge.model` 启用,后台按 `sample_rate` 抽样,LLM Judge 评忠实度(faithfulness 0~1,回答是否被证据支撑)写回 trace;未抽中标记 skipped 不重复拉取。见 `internal/judge`。
+ - **用户反馈闭环**:反馈是分类而非布尔(有帮助/没找到资料/资料过期/答非所问/步骤不可执行/其他),`POST /api/feedback` 挂在 trace 上;`GET /api/stats/export` 把负反馈问题导出为评测集 JSONL(relevant_files 留空待人工标注),进入下一轮离线评测。
+ - **统计**:`GET /api/stats/overview?days=30` 聚合问答量/拒答率/top1 均分/Judge 均分/反馈分布/每日量;前端 `/stats` 页展示。
 
 7. **工程坑**
  - Qdrant 按 `kb_{id}` 分 collection(而非单 collection + payload 过滤),删库干净、查询快。已落地。

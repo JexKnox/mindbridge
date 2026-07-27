@@ -22,7 +22,20 @@ type Config struct {
 	Agent    AgentConfig    `yaml:"agent"`
 	Logging  logging.Config `yaml:"logging"`
 	Metrics  MetricsConfig  `yaml:"metrics"`
+	Judge    JudgeConfig    `yaml:"judge"`
 }
+
+// JudgeConfig 控制线上抽样评测(LLM Judge 评 faithfulness)。
+// model.model 留空则禁用;建议用稳定、便宜的模型,评审结果才可跨期比较。
+type JudgeConfig struct {
+	Model           ModelConfig `yaml:"model"`
+	SampleRate      float64     `yaml:"sample_rate"`      // 抽样率 (0,1],默认 0.2
+	IntervalSeconds int         `yaml:"interval_seconds"` // 轮询间隔,默认 60
+	Batch           int         `yaml:"batch"`            // 单轮最多处理条数,默认 8
+}
+
+// Enabled 返回是否启用 Judge。
+func (j JudgeConfig) Enabled() bool { return j.Model.Model != "" }
 
 // MetricsConfig 控制 Prometheus 指标暴露。Addr 为独立监听地址(与业务端口分离),
 // 置空字符串可关闭;默认 ":9091"。
@@ -170,6 +183,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agent.MaxStep <= 0 {
 		c.Agent.MaxStep = 24
+	}
+	if c.Judge.SampleRate <= 0 || c.Judge.SampleRate > 1 {
+		c.Judge.SampleRate = 0.2
+	}
+	if c.Judge.IntervalSeconds <= 0 {
+		c.Judge.IntervalSeconds = 60
+	}
+	if c.Judge.Batch <= 0 {
+		c.Judge.Batch = 8
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"

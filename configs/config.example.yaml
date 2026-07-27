@@ -63,6 +63,18 @@ agent:
 metrics:
   addr: ":9091"                 # Prometheus /metrics 监听地址(与业务端口分离);置空 "" 关闭
 
+# 线上抽样评测:后台任务抽取问答留痕,用 LLM Judge 评忠实度(faithfulness)写回。
+# model 留空则禁用;建议用稳定、便宜的模型,评审结果才可跨期比较。
+judge:
+  model:
+    provider: openai
+    base_url: "${JUDGE_BASE_URL}"
+    api_key: "${JUDGE_API_KEY}"
+    model: ""                   # 留空禁用
+  sample_rate: 0.2              # 抽样率(成本控制)
+  interval_seconds: 60          # 轮询间隔
+  batch: 8                      # 单轮最多处理条数
+
 logging:
   level: "info"                 # debug/info/warn/error
   encoding: "console"           # console(开发可读)或 json(生产机器可读)

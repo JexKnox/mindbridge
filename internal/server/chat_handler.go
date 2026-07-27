@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
 	"github.com/JexKnox/mindbridge/internal/rag"
+	"github.com/JexKnox/mindbridge/internal/trace"
 )
 
 // chat 在指定 KB 上检索 + 流式生成。
@@ -93,16 +97,40 @@ func (h *handlers) chat(ctx context.Context, c *app.RequestContext) {
 	go func() {
 		defer pw.Close()
 		ctx := context.Background()
+		start := time.Now()
 		onToken := func(token string) {
 			fmt.Fprintf(pw, "data: %s\n\n", token)
 		}
-		cits, err := svc.Answer(ctx, body.Query, onToken)
+		res, err := svc.Answer(ctx, body.Query, onToken)
 		if err != nil {
 			fmt.Fprintf(pw, "event: error\ndata: %s\n\n", err.Error())
 			return
 		}
-		if citsJSON, err := json.Marshal(cits); err == nil {
+		citsJSON, err := json.Marshal(res.Citations)
+		if err == nil {
 			fmt.Fprintf(pw, "event: citations\ndata: %s\n\n", citsJSON)
 		}
+
+		// 问答留痕:先把 trace_id 推给前端(反馈接口引用),再异步落库。
+		traceID := uuid.NewString()
+		fmt.Fprintf(pw, "event: trace\ndata: {\"trace_id\":%q}\n\n", traceID)
+		go func() {
+			tctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			t := &trace.Trace{
+				ID:         traceID,
+				KBID:       k.ID,
+				Query:      body.Query,
+				Answer:     res.Answer,
+				Citations:  citsJSON,
+				Contexts:   res.Contexts,
+				TopScore:   res.TopScore,
+				Refused:    res.Refused,
+				DurationMS: time.Since(start).Milliseconds(),
+			}
+			if err := h.deps.Traces.Insert(tctx, t); err != nil {
+				h.deps.Logger.Warn("insert chat trace failed", zap.Error(err))
+			}
+		}()
 	}()
 }

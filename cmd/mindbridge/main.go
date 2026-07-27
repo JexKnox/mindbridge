@@ -13,12 +13,14 @@ import (
 	"github.com/JexKnox/mindbridge/internal/cache"
 	"github.com/JexKnox/mindbridge/internal/config"
 	"github.com/JexKnox/mindbridge/internal/doc"
+	"github.com/JexKnox/mindbridge/internal/judge"
 	"github.com/JexKnox/mindbridge/internal/kb"
 	"github.com/JexKnox/mindbridge/internal/logging"
 	mindmcp "github.com/JexKnox/mindbridge/internal/mcp"
 	"github.com/JexKnox/mindbridge/internal/metrics"
 	"github.com/JexKnox/mindbridge/internal/repo"
 	"github.com/JexKnox/mindbridge/internal/server"
+	"github.com/JexKnox/mindbridge/internal/trace"
 	"go.uber.org/zap"
 )
 
@@ -83,6 +85,24 @@ func main() {
 
 	agentSvc := agent.NewService(cfg.RAG.RetrieveTopK, sk, mcpRepo, qdrant, logger, caches)
 
+	// 问答留痕仓库:线上抽样评测与用户反馈闭环的地基。
+	traceRepo := trace.NewRepo(db)
+
+	// LLM Judge 线上抽样评测:配置了 judge.model 才启用,后台按抽样率评 faithfulness。
+	if cfg.Judge.Enabled() {
+		judgeChat, err := adapter.NewChatModel(context.Background(), cfg.Judge.Model)
+		if err != nil {
+			logger.Warn("build judge model failed, online sampling disabled", zap.Error(err))
+		} else {
+			j := judge.New(traceRepo, judgeChat, cfg.Judge.SampleRate,
+				time.Duration(cfg.Judge.IntervalSeconds)*time.Second, cfg.Judge.Batch, logger)
+			go j.Run(context.Background())
+			logger.Info("llm judge sampling enabled",
+				zap.Float64("sample_rate", cfg.Judge.SampleRate),
+				zap.Int("interval_seconds", cfg.Judge.IntervalSeconds))
+		}
+	}
+
 	h := server.New(server.Deps{
 		Cfg:      cfg,
 		Logger:   logger,
@@ -92,6 +112,7 @@ func main() {
 		Agent:    agentSvc,
 		MCPRepo:  mcpRepo,
 		Caches:   caches,
+		Traces:   traceRepo,
 	})
 
 	// Prometheus /metrics 独立端口暴露(系统/检索/生成三层指标)。

@@ -23,6 +23,16 @@ type Citation struct {
 	Score      float64 `json:"score"`
 }
 
+// Result 是一次问答的完整结果,除引用外还携带留痕(trace)所需信息:
+// 回答全文、注入 prompt 的证据 chunk(LLM Judge 评 faithfulness 用)、拒答标志。
+type Result struct {
+	Citations []Citation
+	Contexts  []string
+	Answer    string
+	Refused   bool
+	TopScore  float64
+}
+
 // Reranker 对召回文档做 cross-encoder 重排。实现见 adapter.HTTPReranker。
 type Reranker interface {
 	Rerank(ctx context.Context, query string, docs []*schema.Document) ([]*schema.Document, error)
@@ -72,26 +82,32 @@ func NewService(r retriever.Retriever, chat model.ChatModel, opts Options) *Serv
 	}
 }
 
-// Answer 流式生成回答。onToken 用于逐 token 回推前端(SSE);返回完整引用列表。
-func (s *Service) Answer(ctx context.Context, query string, onToken func(string)) ([]Citation, error) {
+// Answer 流式生成回答。onToken 用于逐 token 回推前端(SSE);
+// 返回 Result(引用 + 回答全文 + 证据 chunk + 拒答标志),供 handler 回推引用并写问答留痕。
+func (s *Service) Answer(ctx context.Context, query string, onToken func(string)) (*Result, error) {
 	docs, maxScore, err := s.retrieveWithCache(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("rag: retrieve: %w", err)
 	}
 
-	cits := make([]Citation, 0, len(docs))
+	res := &Result{
+		Citations: make([]Citation, 0, len(docs)),
+		Contexts:  make([]string, 0, len(docs)),
+		TopScore:  maxScore,
+	}
 	for _, d := range docs {
-		cits = append(cits, Citation{
+		res.Citations = append(res.Citations, Citation{
 			SourceFile: asString(d.MetaData["source_file"]),
 			ChunkIndex: asInt(d.MetaData["chunk_index"]),
 			Score:      asFloat(d.MetaData["score"]),
 		})
+		res.Contexts = append(res.Contexts, d.Content)
 	}
 
 	// 拒答:top1 相关度过低时,不注入检索内容,提示模型基于自身说明拒答。
-	refused := len(docs) == 0 || maxScore < s.refuse
+	res.Refused = len(docs) == 0 || maxScore < s.refuse
 	var sys string
-	if refused {
+	if res.Refused {
 		sys = "你是一个严谨的问答助手。知识库中没有与问题相关的信息。" +
 			"请明确告知用户:当前知识库中未找到相关内容,不要编造答案。"
 	} else {
@@ -108,10 +124,11 @@ func (s *Service) Answer(ctx context.Context, query string, onToken func(string)
 	// 生成层指标:TTFT / 完整生成时长 / 输出字符量 / 拒答 / 引用数 / 流错误。
 	genStart := time.Now()
 	var ttft time.Duration
-	chars := 0
 	var streamErr error
+	var answer strings.Builder
 	defer func() {
-		metrics.ObserveAnswer(refused, len(cits), ttft, time.Since(genStart), chars, streamErr)
+		metrics.ObserveAnswer(res.Refused, len(res.Citations), ttft, time.Since(genStart),
+			len([]rune(answer.String())), streamErr)
 	}()
 
 	stream, err := s.chat.Stream(ctx, messages)
@@ -128,17 +145,19 @@ func (s *Service) Answer(ctx context.Context, query string, onToken func(string)
 				break
 			}
 			streamErr = err
-			return cits, fmt.Errorf("rag: recv stream: %w", err)
+			res.Answer = answer.String()
+			return res, fmt.Errorf("rag: recv stream: %w", err)
 		}
 		if msg.Content != "" {
 			if ttft == 0 {
 				ttft = time.Since(genStart)
 			}
-			chars += len([]rune(msg.Content))
+			answer.WriteString(msg.Content)
 			onToken(msg.Content)
 		}
 	}
-	return cits, nil
+	res.Answer = answer.String()
+	return res, nil
 }
 
 // retrieveWithCache 执行「改写 → 多路召回 → 重排/截断」,可选结果缓存。
