@@ -24,16 +24,32 @@ models:
     base_url: "${EMB_BASE_URL}"
     api_key: "${EMB_API_KEY}"
     model: "${EMB_MODEL}"
+  # cross-encoder 重排服务(通用 /rerank API:Jina / Cohere / SiliconFlow / TEI 兼容)。
+  # model 留空则禁用重排,退化为按召回融合序截断。
+  reranker:
+    base_url: "${RERANK_BASE_URL}"   # 如 https://api.siliconflow.cn/v1
+    api_key: "${RERANK_API_KEY}"
+    model: ""                        # 如 BAAI/bge-reranker-v2-m3;留空禁用
+  # query 改写用小模型(多路改写并行召回);model 留空则禁用改写。
+  rewrite:
+    provider: openai
+    base_url: "${REWRITE_BASE_URL}"
+    api_key: "${REWRITE_API_KEY}"
+    model: ""                        # 建议便宜快的小模型;留空禁用
 
 ingest:
   chunk_size: 400               # 每个 chunk 的目标 token 数
   chunk_overlap: 80             # 相邻 chunk 重叠 token 数
   separators: ["\n\n", "\n", " "]
+  embed_batch: 64               # 单次 embedding 请求文本数(限流保护)
+  upsert_batch: 128             # 单次 Qdrant upsert 点数(分批 + 重试)
 
 rag:
-  retrieve_top_k: 20            # 向量召回数量
-  rerank_top_k: 6               # rerank 后保留(留接口,本期不实现 rerank)
-  refuse_threshold: 0.3         # top1 score 低于此值则提示模型拒答
+  retrieve_top_k: 20            # 每路召回数量(向量 / 关键词各自)
+  rerank_top_k: 6               # 重排/截断后保留的文档数
+  refuse_threshold: 0.3         # top1 余弦分低于此值则提示模型拒答
+  hybrid: true                  # BM25 混合检索(向量+关键词,RRF 融合);旧库自动降级纯向量
+  rewrite_n: 2                  # query 改写数量(不含原 query);需配置 models.rewrite
 
 agent:
   max_step: 24                  # ReAct agent 最大步数(模型+工具往返)

@@ -185,7 +185,7 @@ func (s *Service) newKBSearchTool(ctx context.Context, embCfg config.ModelConfig
 	if err != nil {
 		return nil, fmt.Errorf("build embedder: %w", err)
 	}
-	ret := adapter.NewRetriever(s.qdrant, emb, k.Collection, s.topK)
+	ret := adapter.NewRetriever(s.qdrant, emb, k.Collection, s.topK, true)
 
 	type kbSearchInput struct {
 		Query string `json:"query" jsonschema:"description=用于在知识库中做语义检索的自然语言查询"`

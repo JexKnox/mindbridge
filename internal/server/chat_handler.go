@@ -46,13 +46,30 @@ func (h *handlers) chat(ctx context.Context, c *app.RequestContext) {
 		writeErr(c, 500, "build embedder: "+err.Error())
 		return
 	}
-	ret := adapter.NewRetriever(h.deps.Qdrant, emb, k.Collection, h.deps.Cfg.RAG.RetrieveTopK)
+	ragCfg := h.deps.Cfg.RAG
+	ret := adapter.NewRetriever(h.deps.Qdrant, emb, k.Collection, ragCfg.RetrieveTopK, ragCfg.HybridEnabled())
 	chat, err := adapter.NewChatModel(ctx, h.deps.Cfg.Models.Chat)
 	if err != nil {
 		writeErr(c, 500, "build chat model: "+err.Error())
 		return
 	}
-	svc := rag.NewService(ret, chat, h.deps.Cfg.RAG.RerankTopK, h.deps.Cfg.RAG.RefuseThreshold)
+
+	opts := rag.Options{
+		RerankTopK: ragCfg.RerankTopK,
+		Refuse:     ragCfg.RefuseThreshold,
+	}
+	// cross-encoder 重排:配置了 reranker 模型才启用,失败时服务内部自动降级。
+	if h.deps.Cfg.Models.Reranker.Model != "" {
+		opts.Reranker = adapter.NewHTTPReranker(h.deps.Cfg.Models.Reranker, ragCfg.RerankTopK)
+	}
+	// query 改写:配置了改写小模型才启用;构建失败不阻断主链路。
+	if h.deps.Cfg.Models.Rewrite.Model != "" {
+		if rw, err := adapter.NewChatModel(ctx, h.deps.Cfg.Models.Rewrite); err == nil {
+			opts.RewriteModel = rw
+			opts.RewriteN = ragCfg.RewriteN
+		}
+	}
+	svc := rag.NewService(ret, chat, opts)
 
 	// SSE 响应头。
 	c.Response.Header.SetContentType("text/event-stream")

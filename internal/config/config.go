@@ -41,6 +41,11 @@ type QdrantConfig struct {
 type ModelsConfig struct {
 	Chat      ModelConfig `yaml:"chat"`
 	Embedding ModelConfig `yaml:"embedding"`
+	// Reranker 为 cross-encoder 重排服务(通用 /rerank API:Jina/Cohere/SiliconFlow/TEI 兼容)。
+	// model 留空则禁用重排,退化为按召回融合序截断。
+	Reranker ModelConfig `yaml:"reranker"`
+	// Rewrite 为 query 改写用的小模型(建议便宜快的);model 留空则禁用改写。
+	Rewrite ModelConfig `yaml:"rewrite"`
 }
 
 // ModelConfig 描述一个模型 Provider 的连接信息。
@@ -56,12 +61,21 @@ type IngestConfig struct {
 	ChunkSize    int      `yaml:"chunk_size"`
 	ChunkOverlap int      `yaml:"chunk_overlap"`
 	Separators   []string `yaml:"separators"`
+	EmbedBatch   int      `yaml:"embed_batch"`  // 单次 embedding 请求文本数,默认 64
+	UpsertBatch  int      `yaml:"upsert_batch"` // 单次 Qdrant upsert 点数,默认 128
 }
 
 type RAGConfig struct {
 	RetrieveTopK    int     `yaml:"retrieve_top_k"`
 	RerankTopK      int     `yaml:"rerank_top_k"`
 	RefuseThreshold float64 `yaml:"refuse_threshold"`
+	Hybrid          *bool   `yaml:"hybrid"`    // BM25 混合检索开关,默认开;旧 collection 自动降级纯向量
+	RewriteN        int     `yaml:"rewrite_n"` // query 改写数量(不含原 query),默认 2;需配置 models.rewrite
+}
+
+// HybridEnabled 返回混合检索是否开启(默认开)。
+func (r RAGConfig) HybridEnabled() bool {
+	return r.Hybrid == nil || *r.Hybrid
 }
 
 // AgentConfig 描述 agent 链路(检索→决策→调工具→生成)的配置。
@@ -129,6 +143,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.RAG.RefuseThreshold <= 0 {
 		c.RAG.RefuseThreshold = 0.3
+	}
+	if c.RAG.RewriteN <= 0 {
+		c.RAG.RewriteN = 2
+	}
+	if c.Ingest.EmbedBatch <= 0 {
+		c.Ingest.EmbedBatch = 64
+	}
+	if c.Ingest.UpsertBatch <= 0 {
+		c.Ingest.UpsertBatch = 128
 	}
 	if c.Agent.MaxStep <= 0 {
 		c.Agent.MaxStep = 24

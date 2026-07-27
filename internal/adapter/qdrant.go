@@ -32,13 +32,20 @@ func NewQdrantClient(host string, port int, apiKey string) *QdrantClient {
 	}
 }
 
-// CreateCollection 创建一个使用未命名向量(默认向量)、Cosine 距离的 collection。
+// sparseVectorName 是关键词召回用的稀疏向量名(BM25 风格,IDF 由 Qdrant 计算)。
+const sparseVectorName = "bm25"
+
+// CreateCollection 创建一个使用未命名向量(默认向量)、Cosine 距离的 collection,
+// 并附带一个 IDF 加权的稀疏向量(bm25)用于关键词召回。
 // 同一 KB 强制使用同一 embedding 模型;维度一旦确定不可随意更改(变更需重建)。
 func (c *QdrantClient) CreateCollection(ctx context.Context, name string, dim int) error {
 	body := map[string]any{
 		"vectors": map[string]any{
 			"size":     dim,
 			"distance": "Cosine",
+		},
+		"sparse_vectors": map[string]any{
+			sparseVectorName: map[string]any{"modifier": "idf"},
 		},
 		"on_disk_payload": true,
 	}
@@ -82,6 +89,38 @@ func (c *QdrantClient) EnsureCollection(ctx context.Context, name string, dim in
 	return nil
 }
 
+// EnsureSparseVectors 为已有 collection 补建 bm25 稀疏向量配置(幂等)。
+// 旧版建的 collection 没有稀疏向量,补建后新写入的点才带关键词索引;
+// 存量点需重新上传文档才能被关键词召回。
+func (c *QdrantClient) EnsureSparseVectors(ctx context.Context, name string) error {
+	raw, err := c.do(ctx, http.MethodGet, "/collections/"+name, nil)
+	if err != nil {
+		return err
+	}
+	var info struct {
+		Result struct {
+			Config struct {
+				Params struct {
+					SparseVectors map[string]any `json:"sparse_vectors"`
+				} `json:"params"`
+			} `json:"config"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return fmt.Errorf("qdrant: decode collection info: %w", err)
+	}
+	if _, ok := info.Result.Config.Params.SparseVectors[sparseVectorName]; ok {
+		return nil
+	}
+	body := map[string]any{
+		"sparse_vectors": map[string]any{
+			sparseVectorName: map[string]any{"modifier": "idf"},
+		},
+	}
+	_, err = c.do(ctx, http.MethodPatch, "/collections/"+name+"?timeout=60", body)
+	return err
+}
+
 // CreatePayloadIndex 为 payload 字段建索引(keyword 类型)。
 func (c *QdrantClient) CreatePayloadIndex(ctx context.Context, collection, field string) error {
 	body := map[string]any{
@@ -92,16 +131,32 @@ func (c *QdrantClient) CreatePayloadIndex(ctx context.Context, collection, field
 	return err
 }
 
-// Point 是待写入 Qdrant 的点。
+// Point 是待写入 Qdrant 的点。Sparse 可选(nil 表示仅稠密向量)。
 type Point struct {
-	ID      string         `json:"id"`
-	Vector  []float32      `json:"vector"`
-	Payload map[string]any `json:"payload"`
+	ID      string
+	Vector  []float32
+	Sparse  *SparseVector
+	Payload map[string]any
 }
 
-// UpsertPoints 批量写入点。
+// UpsertPoints 批量写入点。带稀疏向量的点用命名向量格式(未命名稠密向量的名字是 "")。
 func (c *QdrantClient) UpsertPoints(ctx context.Context, collection string, points []Point) error {
-	body := map[string]any{"points": points}
+	raw := make([]map[string]any, len(points))
+	for i, p := range points {
+		var vector any = p.Vector
+		if p.Sparse != nil {
+			vector = map[string]any{
+				"":               p.Vector,
+				sparseVectorName: p.Sparse,
+			}
+		}
+		raw[i] = map[string]any{
+			"id":      p.ID,
+			"vector":  vector,
+			"payload": p.Payload,
+		}
+	}
+	body := map[string]any{"points": raw}
 	_, err := c.do(ctx, http.MethodPut, "/collections/"+collection+"/points?wait=true", body)
 	return err
 }
@@ -117,10 +172,10 @@ type ScoredPoint struct {
 // filter 为 nil 表示无过滤;否则形如 {"must":[{"key":"k","match":{"value":"v"}}]}。
 func (c *QdrantClient) SearchPoints(ctx context.Context, collection string, vector []float32, topK int, filter map[string]any) ([]ScoredPoint, error) {
 	body := map[string]any{
-		"vector":        vector,
-		"limit":         topK,
-		"with_payload":  true,
-		"with_vector":   false,
+		"vector":       vector,
+		"limit":        topK,
+		"with_payload": true,
+		"with_vector":  false,
 	}
 	if filter != nil {
 		body["filter"] = filter
@@ -136,6 +191,30 @@ func (c *QdrantClient) SearchPoints(ctx context.Context, collection string, vect
 		return nil, fmt.Errorf("qdrant: decode search result: %w", err)
 	}
 	return out.Result, nil
+}
+
+// QuerySparse 用稀疏向量(关键词)检索 topK。要求 collection 已配置 bm25 稀疏向量;
+// 旧 collection 未配置时 Qdrant 返回错误,调用方应降级为纯向量召回。
+func (c *QdrantClient) QuerySparse(ctx context.Context, collection string, sv *SparseVector, topK int) ([]ScoredPoint, error) {
+	body := map[string]any{
+		"query":        sv,
+		"using":        sparseVectorName,
+		"limit":        topK,
+		"with_payload": true,
+	}
+	raw, err := c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/query", body)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Result struct {
+			Points []ScoredPoint `json:"points"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("qdrant: decode query result: %w", err)
+	}
+	return out.Result.Points, nil
 }
 
 // DeleteByPayload 删除 payload[key]==value 的所有点(用于文档更新时清旧 chunk)。

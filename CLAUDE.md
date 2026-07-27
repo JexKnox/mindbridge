@@ -78,30 +78,32 @@ configs/              配置示例
 
 1. **切分策略是 RAG 质量的第一决定因素**
    - 按 token(非字符)切,`chunk_size=400 / overlap=80` 可配;分隔符优先级 `\n\n`→`\n`→` `。骨架已落地:`internal/doc/splitter.go`。
-   - 每个 chunk 的 `Meta` 必须带 `source_file` / `chunk_index`,用于引用追溯与按文件删除。
-   - 文档解析支持 `.md`(goldmark 抽纯文本)、`.docx`(纯 Go 解析 zip+XML)、`.txt`(原样);见 `internal/doc/loader.go`。其它扩展名按纯文本兜底。
-   - TODO:结构化切分(PDF/HTML 按 header/段落,代码/表格整体保留)。
+ - 每个 chunk 的 `Meta` 必须带 `source_file` / `chunk_index`,用于引用追溯与按文件删除。
+ - 文档解析支持 `.md`(goldmark 抽纯文本)、`.docx`(纯 Go 解析 zip+XML)、`.txt`(原样);见 `internal/doc/loader.go`。其它扩展名按纯文本兜底。
+ - 结构化切分已落地(markdown):按标题分节、chunk 前缀标题路径、代码块/表格整块保留;见 `internal/doc/markdown.go`。TODO:PDF/HTML 结构化切分。
 
 2. **混合检索 + Reranker**
-   - 向量召回(语义)+ 关键词召回(BM25),分数用 RRF 融合;召回 topK 后用 cross-encoder rerank 到 rerankTopK。骨架已落地:纯向量召回 + `rerankTopK` 截断占位。
-   - TODO:BM25 混合检索、reranker 接入(bge-reranker / Cohere / Qwen3-reranker,eino 有 reranker 接口)。接口位在 `internal/rag/service.go`。
+ - 已落地:向量召回(语义)+ 关键词召回(Qdrant sparse 向量,IDF modifier 近似 BM25),Go 侧 RRF 融合;分词为中英混合(CJK bigram + 英文词),见 `internal/adapter/sparse.go` / `retriever.go`。旧 collection 无稀疏向量时自动降级纯向量,上传文档时自动补建稀疏配置(存量点需重传才可被关键词召回)。
+ - 已落地:cross-encoder reranker,通用 HTTP `/rerank` API(Jina / Cohere / SiliconFlow / TEI 兼容),配置 `models.reranker`(model 留空禁用);见 `internal/adapter/reranker.go`。重排分写入 `rerank_score`,拒答阈值仍用余弦分。
 
 3. **embedding 维度与模型绑死到 KB**
-   - 建库时探测维度写入 KB 元信息 + Qdrant collection;同一 KB 强制同一 embedding 模型。骨架已落地:`internal/kb/manager.go` + `internal/adapter/embedding.go`。
-   - TODO:在 `payload` 存 `embedding_model`/`embedding_version` 便于审计与迁移。
+ - 建库时探测维度写入 KB 元信息 + Qdrant collection;同一 KB 强制同一 embedding 模型。骨架已落地:`internal/kb/manager.go` + `internal/adapter/embedding.go`。
+ - 已落地:每个 chunk 的 payload 存 `embedding_model`(pipeline 写入),便于审计与迁移。
 
 4. **查询侧做 query 改写**
-   - 不直接拿用户原话检索;HyDE / 多路改写并行召回后去重合并。骨架已落地:直通占位 `internal/rag/query.go`。TODO:接入 LLM 改写(用便宜小模型)。
+ - 已落地:LLM 多路改写(配置 `models.rewrite` 小模型 + `rag.rewrite_n`),原 query + 改写 query 各自召回,跨 query 去重后 RRF 合并;改写失败静默降级仅原 query。见 `internal/rag/query.go` / `service.go`。TODO:HyDE。
 
 5. **生成阶段:流式 + 引用 + 拒答**
    - SSE 流式逐 token;prompt 注入带 `[1][2]` 编号的召回 chunk 要求标注;top1 score < 阈值则提示拒答;SSE 末尾发 `event:citations`。骨架已落地:`internal/rag/service.go` + `internal/server/chat_handler.go`。
 
 6. **评估闭环**
-   - 每个知识库建 20–50 条标准 Q&A eval set;检索指标(recall@k、MRR)+ 生成指标(faithfulness、answer relevance,RAGAS 思路);换模型/调参前后跑一遍用数字说话。TODO:未实现。
+ - 每个知识库建 20–50 条标准 Q&A eval set;换模型/调参前后跑一遍用数字说话。
+ - 检索指标已落地:`go run ./cmd/mindbridge-eval -kb <id> -eval evalset.jsonl -k 5` 输出 recall@k / MRR / hit@k,评估集为 JSONL(`{"question":..., "relevant_files":[...]}`)。
+ - TODO:生成指标(faithfulness、answer relevance,RAGAS 思路)。
 
 7. **工程坑**
-   - Qdrant 按 `kb_{id}` 分 collection(而非单 collection + payload 过滤),删库干净、查询快。已落地。
-   - collection 创建时为 `source_file`、`kb_id` 建 payload keyword 索引。已落地:`internal/adapter/qdrant.go`。
-   - 重新上传同名文件:先按 `source_file` 删旧 chunk 再写新,避免幽灵数据。已落地:`internal/server/doc_handler.go`。
-   - 批量 embedding 注意 Qdrant upsert 限流,分批 + 重试。TODO。
+ - Qdrant 按 `kb_{id}` 分 collection(而非单 collection + payload 过滤),删库干净、查询快。已落地。
+ - collection 创建时为 `source_file`、`kb_id` 建 payload keyword 索引。已落地:`internal/adapter/qdrant.go`。
+ - 重新上传同名文件:先按 `source_file` 删旧 chunk 再写新,避免幽灵数据。已落地:`internal/server/doc_handler.go`。
+ - 批量 embedding / Qdrant upsert 分批 + 指数退避重试(`ingest.embed_batch` / `ingest.upsert_batch`)。已落地:`internal/adapter/indexer.go`。
 

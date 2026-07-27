@@ -26,16 +26,29 @@ models:
     base_url: "${EMB_BASE_URL}"
     api_key: "${EMB_API_KEY}"
     model: "${EMB_MODEL}"
+  reranker:
+    base_url: "${RERANK_BASE_URL}"
+    api_key: "${RERANK_API_KEY}"
+    model: "${RERANK_MODEL}"       # 留空禁用重排
+  rewrite:
+    provider: openai
+    base_url: "${REWRITE_BASE_URL}"
+    api_key: "${REWRITE_API_KEY}"
+    model: "${REWRITE_MODEL}"      # 留空禁用 query 改写
 
 ingest:
   chunk_size: 400
   chunk_overlap: 80
   separators: ["\n\n", "\n", " "]
+  embed_batch: 64
+  upsert_batch: 128
 
 rag:
   retrieve_top_k: 20
   rerank_top_k: 6
   refuse_threshold: 0.3
+  hybrid: true
+  rewrite_n: 2
 
 agent:
   max_step: 24

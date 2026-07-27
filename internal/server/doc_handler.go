@@ -5,6 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
+	"go.uber.org/zap"
 
 	"github.com/JexKnox/mindbridge/internal/adapter"
 )
@@ -35,6 +36,13 @@ func (h *handlers) uploadDocument(ctx context.Context, c *app.RequestContext) {
 	// 同一文件重新上传:先按 source_file 删旧 chunk,避免幽灵数据。
 	_ = h.deps.Qdrant.DeleteByPayload(ctx, k.Collection, "source_file", header.Filename)
 
+	// 旧版建的 collection 无 bm25 稀疏向量,补建后新写入的 chunk 才可被关键词召回。
+	// 失败不阻断上传:仅影响混合检索(自动降级纯向量)。
+	if err := h.deps.Qdrant.EnsureSparseVectors(ctx, k.Collection); err != nil {
+		h.deps.Logger.Warn("ensure sparse vectors failed, keyword recall degraded",
+			zap.String("collection", k.Collection), zap.Error(err))
+	}
+
 	embCfg := h.deps.Cfg.Models.Embedding
 	embCfg.Model = k.EmbeddingModel
 	emb, err := adapter.NewEmbedder(ctx, embCfg)
@@ -42,7 +50,10 @@ func (h *handlers) uploadDocument(ctx context.Context, c *app.RequestContext) {
 		writeErr(c, 500, "build embedder: "+err.Error())
 		return
 	}
-	idx := adapter.NewIndexer(h.deps.Qdrant, emb, k.Collection)
+	idx := adapter.NewIndexer(h.deps.Qdrant, emb, k.Collection, adapter.IndexerConfig{
+		EmbedBatch:  h.deps.Cfg.Ingest.EmbedBatch,
+		UpsertBatch: h.deps.Cfg.Ingest.UpsertBatch,
+	})
 
 	n, err := h.deps.Pipeline.Ingest(ctx, k, idx, header.Filename, file)
 	if err != nil {
