@@ -60,6 +60,9 @@ agent:
     #   transport: "sse"
     #   endpoint: "http://localhost:12345/sse"
 
+metrics:
+  addr: ":9091"                 # Prometheus /metrics 监听地址(与业务端口分离);置空 "" 关闭
+
 logging:
   level: "info"                 # debug/info/warn/error
   encoding: "console"           # console(开发可读)或 json(生产机器可读)

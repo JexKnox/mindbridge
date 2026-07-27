@@ -3,20 +3,43 @@ package adapter
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/components/embedding"
 
 	"github.com/JexKnox/mindbridge/internal/config"
+	"github.com/JexKnox/mindbridge/internal/metrics"
 )
 
-// NewEmbedder 按 cfg.Provider 构造一个 eino embedding.Embedder。
+// NewEmbedder 按 cfg.Provider 构造一个 eino embedding.Embedder(带 API 延迟/错误埋点)。
 func NewEmbedder(ctx context.Context, cfg config.ModelConfig) (embedding.Embedder, error) {
+	var (
+		emb embedding.Embedder
+		err error
+	)
 	switch cfg.Provider {
 	case "openai":
-		return newOpenAIEmbedder(ctx, cfg)
+		emb, err = newOpenAIEmbedder(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("adapter: unsupported embedding provider %q", cfg.Provider)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &timedEmbedder{inner: emb}, nil
+}
+
+// timedEmbedder 给 embedding API 调用加延迟/错误指标。
+// 包在缓存装饰器内侧:缓存命中不算一次 API 调用。
+type timedEmbedder struct {
+	inner embedding.Embedder
+}
+
+func (t *timedEmbedder) EmbedStrings(ctx context.Context, texts []string, opts ...embedding.Option) ([][]float64, error) {
+	start := time.Now()
+	vecs, err := t.inner.EmbedStrings(ctx, texts, opts...)
+	metrics.ObserveModel("embedding", start, err)
+	return vecs, err
 }
 
 // EmbedDim 探测 embedding 模型输出的向量维度。

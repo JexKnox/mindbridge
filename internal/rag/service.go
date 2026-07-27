@@ -6,12 +6,14 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/JexKnox/mindbridge/internal/cache"
+	"github.com/JexKnox/mindbridge/internal/metrics"
 )
 
 // Citation 是返回给前端的来源引用。
@@ -87,8 +89,9 @@ func (s *Service) Answer(ctx context.Context, query string, onToken func(string)
 	}
 
 	// 拒答:top1 相关度过低时,不注入检索内容,提示模型基于自身说明拒答。
+	refused := len(docs) == 0 || maxScore < s.refuse
 	var sys string
-	if len(docs) == 0 || maxScore < s.refuse {
+	if refused {
 		sys = "你是一个严谨的问答助手。知识库中没有与问题相关的信息。" +
 			"请明确告知用户:当前知识库中未找到相关内容,不要编造答案。"
 	} else {
@@ -102,8 +105,18 @@ func (s *Service) Answer(ctx context.Context, query string, onToken func(string)
 		schema.UserMessage(query),
 	}
 
+	// 生成层指标:TTFT / 完整生成时长 / 输出字符量 / 拒答 / 引用数 / 流错误。
+	genStart := time.Now()
+	var ttft time.Duration
+	chars := 0
+	var streamErr error
+	defer func() {
+		metrics.ObserveAnswer(refused, len(cits), ttft, time.Since(genStart), chars, streamErr)
+	}()
+
 	stream, err := s.chat.Stream(ctx, messages)
 	if err != nil {
+		streamErr = err
 		return nil, fmt.Errorf("rag: chat stream: %w", err)
 	}
 	defer stream.Close()
@@ -114,9 +127,14 @@ func (s *Service) Answer(ctx context.Context, query string, onToken func(string)
 			if err == io.EOF {
 				break
 			}
+			streamErr = err
 			return cits, fmt.Errorf("rag: recv stream: %w", err)
 		}
 		if msg.Content != "" {
+			if ttft == 0 {
+				ttft = time.Since(genStart)
+			}
+			chars += len([]rune(msg.Content))
 			onToken(msg.Content)
 		}
 	}
@@ -130,7 +148,9 @@ func (s *Service) retrieveWithCache(ctx context.Context, query string) ([]*schem
 	var cacheKey string
 	if s.retrievalCache != nil {
 		cacheKey = s.cacheKeyPrefix + ":" + cache.Hash(query)
-		if ent, ok := s.retrievalCache.Get(cacheKey); ok {
+		ent, ok := s.retrievalCache.Get(cacheKey)
+		metrics.Cache("retrieval", ok)
+		if ok {
 			return ent.Docs, ent.MaxScore, nil
 		}
 	}
@@ -144,11 +164,15 @@ func (s *Service) retrieveWithCache(ctx context.Context, query string) ([]*schem
 
 	// 拒答判断基于重排前的最高余弦分:重排分数量纲不同,且重排只影响排序不改相关性事实。
 	maxScore := topScore(docs)
+	metrics.ObserveRetrieval(len(docs), maxScore)
 
 	if s.reranker != nil && len(docs) > 0 {
+		preTop1 := docs[0].ID
 		reranked, err := s.reranker.Rerank(ctx, query, docs)
 		if err == nil {
 			docs = reranked
+			// rerank 前后 top1 变化率:过高说明召回排序差,持续为 0 说明重排冗余。
+			metrics.ObserveRerank(len(docs) > 0 && docs[0].ID != preTop1)
 		}
 		// 重排失败静默降级为融合序截断,不阻断回答。
 	}

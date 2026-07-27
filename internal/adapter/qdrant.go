@@ -14,6 +14,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
+
+	"github.com/JexKnox/mindbridge/internal/metrics"
 )
 
 // QdrantClient 是 Qdrant REST API 的薄封装。
@@ -157,7 +160,9 @@ func (c *QdrantClient) UpsertPoints(ctx context.Context, collection string, poin
 		}
 	}
 	body := map[string]any{"points": raw}
+	done := metrics.ObserveQdrant("upsert", time.Now())
 	_, err := c.do(ctx, http.MethodPut, "/collections/"+collection+"/points?wait=true", body)
+	done(err)
 	return err
 }
 
@@ -180,7 +185,9 @@ func (c *QdrantClient) SearchPoints(ctx context.Context, collection string, vect
 	if filter != nil {
 		body["filter"] = filter
 	}
+	done := metrics.ObserveQdrant("search", time.Now())
 	raw, err := c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/search", body)
+	done(err)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +209,9 @@ func (c *QdrantClient) QuerySparse(ctx context.Context, collection string, sv *S
 		"limit":        topK,
 		"with_payload": true,
 	}
+	done := metrics.ObserveQdrant("query_sparse", time.Now())
 	raw, err := c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/query", body)
+	done(err)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +235,9 @@ func (c *QdrantClient) DeleteByPayload(ctx context.Context, collection, key, val
 			},
 		},
 	}
+	done := metrics.ObserveQdrant("delete", time.Now())
 	_, err := c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/delete?wait=true", body)
+	done(err)
 	return err
 }
 

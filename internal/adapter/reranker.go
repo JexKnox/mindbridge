@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/JexKnox/mindbridge/internal/config"
+	"github.com/JexKnox/mindbridge/internal/metrics"
 )
 
 // HTTPReranker 调用 OpenAI 风格的 /rerank API 做 cross-encoder 重排。
@@ -46,10 +48,11 @@ func NewHTTPReranker(cfg config.ModelConfig, topN int) *HTTPReranker {
 // Rerank 对 docs 按与 query 的相关度重排,返回前 topN 个。
 // 重排相关度写入 MetaData["rerank_score"];MetaData["score"](向量余弦)保留,
 // 拒答阈值仍基于余弦分判断,量纲不混用。
-func (r *HTTPReranker) Rerank(ctx context.Context, query string, docs []*schema.Document) ([]*schema.Document, error) {
+func (r *HTTPReranker) Rerank(ctx context.Context, query string, docs []*schema.Document) (ranked []*schema.Document, err error) {
 	if len(docs) == 0 {
 		return docs, nil
 	}
+	defer func(start time.Time) { metrics.ObserveModel("rerank", start, err) }(time.Now())
 	texts := make([]string, len(docs))
 	for i, d := range docs {
 		texts[i] = d.Content

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -21,6 +22,7 @@ import (
 	"github.com/JexKnox/mindbridge/internal/kb"
 	"github.com/JexKnox/mindbridge/internal/logging"
 	mindmcp "github.com/JexKnox/mindbridge/internal/mcp"
+	"github.com/JexKnox/mindbridge/internal/metrics"
 	"go.uber.org/zap"
 )
 
@@ -42,6 +44,7 @@ func New(d Deps) *server.Hertz {
 
 	h.Use(requestid.New())
 	h.Use(logging.AccessLog(d.Logger))
+	h.Use(metricsMiddleware())
 
 	ctl := &handlers{deps: d}
 
@@ -99,4 +102,18 @@ func mountSPA(h *server.Hertz, staticDir string) {
 
 type handlers struct {
 	deps Deps
+}
+
+// metricsMiddleware 记录请求量/状态码/耗时。path 用注册路由(如 /api/kb/:id/chat)
+// 而非真实 URL,避免 kb_id 等参数造成指标高基数。
+func metricsMiddleware() app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		start := time.Now()
+		c.Next(ctx)
+		path := c.FullPath()
+		if path == "" {
+			path = "unmatched" // 静态资源/SPA 回退等未注册路由,归并为一类
+		}
+		metrics.RecordHTTP(string(c.Method()), path, c.Response.StatusCode(), time.Since(start))
+	}
 }

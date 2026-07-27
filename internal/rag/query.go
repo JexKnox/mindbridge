@@ -5,11 +5,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/JexKnox/mindbridge/internal/cache"
+	"github.com/JexKnox/mindbridge/internal/metrics"
 )
 
 // QueryRewriter 把用户原始 query 改写成多个更适合检索的形式(指代消解、多角度表述),
@@ -43,7 +45,9 @@ func (q *QueryRewriter) Rewrite(ctx context.Context, query string) []string {
 
 	cacheKey := fmt.Sprintf("rw:%d:%s", q.n, cache.Hash(query))
 	if q.cache != nil {
-		if cached, ok := q.cache.Get(cacheKey); ok {
+		cached, ok := q.cache.Get(cacheKey)
+		metrics.Cache("rewrite", ok)
+		if ok {
 			return cached
 		}
 	}
@@ -52,7 +56,9 @@ func (q *QueryRewriter) Rewrite(ctx context.Context, query string) []string {
 		schema.SystemMessage(fmt.Sprintf(rewritePrompt, q.n)),
 		schema.UserMessage(query),
 	}
+	start := time.Now()
 	resp, err := q.chat.Generate(ctx, msgs)
+	metrics.ObserveModel("rewrite", start, err)
 	if err != nil {
 		return queries
 	}

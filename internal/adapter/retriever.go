@@ -8,6 +8,8 @@ import (
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/JexKnox/mindbridge/internal/metrics"
 )
 
 // rrfK 是 RRF 融合的平滑常数(业界通用取 60)。
@@ -53,6 +55,13 @@ func (r *qdrantRetriever) Retrieve(ctx context.Context, query string, _ ...retri
 	}
 
 	hits := fuseRRF(dense, sparse, r.topK)
+
+	// 检索层指标:各通道候选数与融合后数量,用于观察某一路召回异常(如稀疏路始终为 0)。
+	metrics.ObserveCandidates("dense", len(dense))
+	if r.hybrid {
+		metrics.ObserveCandidates("sparse", len(sparse))
+	}
+	metrics.ObserveCandidates("fused", len(hits))
 
 	docs := make([]*schema.Document, 0, len(hits))
 	for _, h := range hits {

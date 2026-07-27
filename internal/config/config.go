@@ -21,6 +21,21 @@ type Config struct {
 	RAG      RAGConfig      `yaml:"rag"`
 	Agent    AgentConfig    `yaml:"agent"`
 	Logging  logging.Config `yaml:"logging"`
+	Metrics  MetricsConfig  `yaml:"metrics"`
+}
+
+// MetricsConfig 控制 Prometheus 指标暴露。Addr 为独立监听地址(与业务端口分离),
+// 置空字符串可关闭;默认 ":9091"。
+type MetricsConfig struct {
+	Addr *string `yaml:"addr"`
+}
+
+// ListenAddr 返回 /metrics 监听地址;yaml 未配置时默认 ":9091",显式配置空串表示关闭。
+func (m MetricsConfig) ListenAddr() string {
+	if m.Addr == nil {
+		return ":9091"
+	}
+	return *m.Addr
 }
 
 type ServerConfig struct {

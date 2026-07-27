@@ -6,6 +6,7 @@ import (
 	"github.com/cloudwego/eino/components/embedding"
 
 	"github.com/JexKnox/mindbridge/internal/cache"
+	"github.com/JexKnox/mindbridge/internal/metrics"
 )
 
 // cachedEmbedder 装饰 embedding.Embedder,按「模型名 + 文本哈希」缓存向量。
@@ -30,7 +31,9 @@ func (e *cachedEmbedder) EmbedStrings(ctx context.Context, texts []string, opts 
 	var missTexts []string
 	var missIdx []int
 	for i, t := range texts {
-		if v, ok := e.cache.Get(e.key(t)); ok {
+		v, ok := e.cache.Get(e.key(t))
+		metrics.Cache("embedding", ok)
+		if ok {
 			out[i] = v
 			continue
 		}

@@ -62,6 +62,7 @@ internal/
   config/             YAML 配置 + ${VAR} 环境变量替换
   logging/            zap 日志器构建 + chi 请求日志中间件
   cache/              进程内缓存:泛型 LRU(容量+TTL)+ KB 版本号(检索缓存失效)
+  metrics/            Prometheus 指标(系统/检索/生成三层)+ /metrics 独立端口
   repo/               Postgres 连接池 + 迁移(embed.FS)
   adapter/            ★适配层:chat/embedding/indexer/retriever 工厂 + Qdrant REST 客户端
   kb/                 知识库领域:元信息 + 建库编排(探测维度 → 建 collection → 写元信息)
@@ -116,4 +117,12 @@ configs/              配置示例
  - **失效策略**:key 携带 KB 版本号(`cache.Versions`,进程内计数器),上传/删除文档时 `Bump`,旧版本条目查不到、随 LRU 自然淘汰,无需主动清理;调参后 key 前缀变化同理。版本号重启归零,与进程内缓存生命周期一致。
  - **不做最终答案缓存**:回答是流式 + 引用,语义缓存命中错答案的风险大于收益。
  - Rerank 不单独设缓存层:检索结果缓存存的就是重排后结果,一层顶两层。
+
+9. **监控(已落地,`internal/metrics`,Prometheus)**
+ - `/metrics` 走独立端口(默认 `:9091`,配置 `metrics.addr`,置空关闭):与业务端口分离,SSE 长连接不影响抓取,内部指标不暴露到业务入口。指标统一 `mindbridge_` 前缀;Go 运行时指标(内存/GC/goroutine)由默认收集器自带。
+ - **系统层**:`http_requests_total`(method/path/status,path 用注册路由防高基数)、`http_request_duration_seconds`(P50/P95/P99 用直方图分位)、`qdrant_request_duration_seconds` + `qdrant_request_errors_total`(op=search/query_sparse/upsert/delete)、`model_request_duration_seconds` + `model_request_errors_total`(kind=embedding/rerank/rewrite,错误率上升 = API 可用性下降)。
+ - **检索层**:`retrieval_candidates`(channel=dense/sparse/fused,某一路持续为 0 说明该通道故障)、`retrieval_empty_total` / `retrieval_requests_total`(空结果率突升先查索引/过滤,不一定是模型问题)、`retrieval_top1_score`(分布左移 = 检索质量劣化)、`rerank_top1_changed_total` / `rerank_requests_total`(占比过高 = 召回排序差,持续为 0 = 重排冗余)、`cache_hits/misses_total`(cache=embedding/rewrite/retrieval)。
+ - **生成层**:`chat_first_token_seconds`(TTFT)、`chat_generation_seconds`、`chat_output_chars`(token 近似,流式响应不带 usage)、`chat_refusals_total` / `chat_answers_total`(拒答率)、`chat_citations`、`chat_stream_errors_total`。
+ - 埋点位置:HTTP 中间件在 `internal/server/server.go`;Qdrant 在 `internal/adapter/qdrant.go` 各操作;模型调用在 embedder 装饰器 / reranker / rewriter;检索与生成在 `internal/adapter/retriever.go` + `internal/rag/service.go`。
+ - TODO:线上抽样 Recall/MRR/Faithfulness(离线评估已有 `cmd/mindbridge-eval`)、Grafana dashboard、告警规则。
 

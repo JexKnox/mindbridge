@@ -16,6 +16,7 @@ import (
 	"github.com/JexKnox/mindbridge/internal/kb"
 	"github.com/JexKnox/mindbridge/internal/logging"
 	mindmcp "github.com/JexKnox/mindbridge/internal/mcp"
+	"github.com/JexKnox/mindbridge/internal/metrics"
 	"github.com/JexKnox/mindbridge/internal/repo"
 	"github.com/JexKnox/mindbridge/internal/server"
 	"go.uber.org/zap"
@@ -92,6 +93,9 @@ func main() {
 		MCPRepo:  mcpRepo,
 		Caches:   caches,
 	})
+
+	// Prometheus /metrics 独立端口暴露(系统/检索/生成三层指标)。
+	metrics.Serve(cfg.Metrics.ListenAddr(), logger)
 
 	logger.Info("mindbridge listening", zap.String("addr", cfg.Server.Addr))
 	// h.Spin() 内部处理 SIGINT/SIGTERM 优雅停机,无需手写信号监听。

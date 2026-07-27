@@ -54,6 +54,9 @@ agent:
   max_step: 24
   mcp_servers: []
 
+metrics:
+  addr: ":9091"   # Prometheus 抓取端点;compose 内可加 prometheus 服务抓 mindbridge:9091
+
 logging:
   level: "info"
   encoding: "console"
